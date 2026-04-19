@@ -264,7 +264,7 @@ body.aquarium {
   touch-action: auto;
   pointer-events: none;
   z-index: 1;
-  opacity: .42;
+  opacity: .55;
   mix-blend-mode: screen;
 }
 
@@ -425,7 +425,17 @@ body.aquarium {
   will-change: transform;
   pointer-events: none;
   filter: drop-shadow(0 6px 12px rgba(0,0,0,.35));
+  /* When a fish exits the cinematic (featured-mode class removed), the
+     depth-* filter (saturate/brightness/blur) would snap in. These transitions
+     fade the atmospheric depth look in over ~1.5s instead. */
+  transition: filter 1.5s ease, opacity 1.5s ease;
 }
+/* During the cinematic we want the highlight to snap on instantly. */
+.fish-sprite.featured-mode { transition: none; }
+
+/* Transitional state: newly-joined fish stay above the coral overlay for
+   a beat while their filter fades, then the depth class takes over. */
+.fish-sprite.school-settling { z-index: 9; }
 .fish-shadow {
   position: absolute;
   top: 0;

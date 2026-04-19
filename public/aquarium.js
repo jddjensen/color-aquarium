@@ -156,38 +156,57 @@ function initCaustics(canvas) {
     uniform vec2 uResolution;
     uniform float uTime;
 
-    mat2 rot(float a) {
-      float s = sin(a), c = cos(a);
-      return mat2(c, -s, s, c);
-    }
+    #define TAU 6.28318530718
+    #define ITERATIONS 5
 
-    float caustic(vec2 p) {
-      float t = uTime * 0.22;
-      float glow = 0.0;
-      p *= 2.8;
-      for (int i = 0; i < 3; i++) {
-        p += vec2(sin(p.y * 2.1 + t), cos(p.x * 1.7 - t)) * 0.28;
-        float ridge = sin(p.x + sin(p.y + t)) + cos(p.y + cos(p.x - t));
-        glow += abs(ridge);
-        p = rot(0.9) * p * 1.32;
-        t *= 1.17;
+    // Classic caustics — iterated domain-warped trig creates the bright
+    // filament/web pattern that real refracted sunlight makes on a pool
+    // floor. Derived from the well-known TDM / Shadertoy caustics recipe.
+    float causticNet(vec2 uv, float t) {
+      vec2 p = mod(uv * TAU, TAU) - 250.0;
+      vec2 i = p;
+      float c = 1.0;
+      float inten = 0.005;
+      for (int n = 0; n < ITERATIONS; n++) {
+        float ts = t * (1.0 - (3.5 / float(n + 1)));
+        i = p + vec2(cos(ts - i.x) + sin(ts + i.y),
+                     sin(ts - i.y) + cos(ts + i.x));
+        c += 1.0 / length(vec2(
+          p.x / (sin(i.x + ts) / inten),
+          p.y / (cos(i.y + ts) / inten)
+        ));
       }
-      return pow(max(0.0, 1.75 - glow), 4.5);
+      c /= float(ITERATIONS);
+      c = 1.17 - pow(c, 1.4);
+      return max(0.0, pow(abs(c), 7.0));
     }
 
     void main() {
       vec2 uv = gl_FragCoord.xy / uResolution.xy;
-      vec2 p = (uv - 0.5) * vec2(uResolution.x / uResolution.y, 1.0);
-      p.y += uTime * 0.03;
+      // Aspect-correct the sampling coords so the net doesn't stretch.
+      vec2 p = vec2(uv.x * uResolution.x / uResolution.y, uv.y);
 
-      float band = smoothstep(-0.55, 0.35, uv.y) * (1.0 - smoothstep(0.78, 1.02, uv.y));
-      float c = caustic(p);
-      c += caustic(p * 1.6 + vec2(1.7, -1.2)) * 0.35;
-      c *= band;
+      float t = uTime * 0.35 + 23.0;
 
-      vec3 col = mix(vec3(0.06, 0.18, 0.26), vec3(0.58, 0.78, 0.92), c);
-      float alpha = clamp(c * 0.14, 0.0, 0.14);
-      gl_FragColor = vec4(col, alpha);
+      // Two layers at different scales — richer texture without blowing out.
+      float a = causticNet(p * 0.9, t);
+      float b = causticNet(p * 1.7 + vec2(17.2, 8.3), t * 0.7) * 0.55;
+      float brightness = max(a, b);
+
+      // Depth falloff: strong at the surface (top), nearly invisible below.
+      float depth = smoothstep(1.05, -0.2, uv.y);
+      brightness *= depth;
+
+      // Warm where sunlight enters, cooling to blue as it diffuses deeper.
+      vec3 warmLight = vec3(1.0, 0.97, 0.84);
+      vec3 coolLight = vec3(0.62, 0.90, 1.0);
+      vec3 col = mix(coolLight, warmLight, smoothstep(0.2, 0.95, uv.y));
+
+      float intensity = clamp(brightness, 0.0, 1.0);
+      // Soft shoulder so peak filaments don't hotspot.
+      intensity = 1.0 - pow(1.0 - intensity, 1.5);
+
+      gl_FragColor = vec4(col * intensity, intensity * 0.85);
     }
   `;
 
@@ -337,6 +356,12 @@ class Fish {
     this.isIdle = false;
     this.bubbleTimer = 3 + this.rand() * 6;
 
+    // Encounter system: occasional chase / orbit / curious interactions.
+    this.encounterCooldown = 8 + this.rand() * 14;   // seconds before first attempt
+    this.encounterState = null;                       // 'chase'|'fleeing'|'orbit'|'curious'
+    this.encounterTarget = null;
+    this.encounterTTL = 0;
+
     this.x = -9999;
     this.y = -9999;
     this.vx = -this.baseSpeed;
@@ -369,7 +394,24 @@ class Fish {
     if (this.splash) { this.splash.remove(); this.splash = null; }
     const W = window.innerWidth, H = window.innerHeight;
     const baseSize = 80 + this.rand() * 80;
-    this.size = baseSize * this.depthScale;
+    const targetSize = baseSize * this.depthScale;
+
+    // Smooth shrink from the featured size down to the school size so the fish
+    // doesn't visibly "pop" into the background. Filter / opacity transitions
+    // (in CSS) cover the depth-class filter fade simultaneously.
+    this.schoolTransitionMs = 1500;
+    this.schoolTransitionStart = performance.now();
+    this.schoolTransitionFromSize = this.size || targetSize;
+    this.schoolTargetSize = targetSize;
+
+    // Hold the sprite above the coral overlay while its filter fades in,
+    // so it doesn't visibly drop behind foreground elements mid-shrink.
+    this.el.classList.add('school-settling');
+    if (this._settleTimer) clearTimeout(this._settleTimer);
+    this._settleTimer = setTimeout(() => {
+      this.el.classList.remove('school-settling');
+      this._settleTimer = null;
+    }, this.schoolTransitionMs);
 
     if (this.x < -1000) {
       this.x = Math.random() * W;
@@ -409,7 +451,29 @@ class Fish {
     }
 
     const dt = dtMs / 1000;
-    this.stepPersonality(dt, W, H);
+
+    // Smooth shrink from the featured size to the final school size so newly
+    // joined fish glide into the background instead of popping.
+    if (this.schoolTransitionMs > 0) {
+      const elapsed = tMs - this.schoolTransitionStart;
+      if (elapsed >= this.schoolTransitionMs) {
+        this.size = this.schoolTargetSize;
+        this.schoolTransitionMs = 0;
+      } else {
+        const u = elapsed / this.schoolTransitionMs;
+        const e = easeInOut(u);
+        this.size = this.schoolTransitionFromSize +
+          (this.schoolTargetSize - this.schoolTransitionFromSize) * e;
+      }
+    }
+
+    this.stepEncounter(dt);
+    // During chase/flee, the encounter force is dominant — skip idle personality
+    // so the fish commits to the interaction.
+    if (this.encounterState !== 'chase' && this.encounterState !== 'fleeing') {
+      this.stepPersonality(dt, W, H);
+    }
+    this.applyEncounterForce(dt);
     this.applyCursorRepulsion(dt);
     this.applyFlocking(dt);
     this.stepIdle(dt, tMs);
@@ -473,13 +537,16 @@ class Fish {
   }
 
   applyFlocking(dt) {
-    // Gentle boids-style influence from nearby schoolmates.
-    const NEIGHBOR = 130;
+    // Species-weighted boids: same-species neighbors dominate the alignment /
+    // cohesion averages so fish of the same kind naturally school tighter,
+    // while different species still politely steer around each other.
+    const NEIGHBOR = 150;
     const SEP = 55;
-    let ax = 0, ay = 0;  // alignment
-    let cx = 0, cy = 0;  // cohesion
-    let sx = 0, sy = 0;  // separation
-    let nAlign = 0, nSep = 0;
+    let ax = 0, ay = 0;  // weighted alignment sum
+    let cx = 0, cy = 0;  // weighted cohesion sum
+    let sx = 0, sy = 0;  // separation (unweighted — personal space is universal)
+    let wAlign = 0;
+    let nSep = 0;
     const myCx = this.x + this.size * 0.5;
     const myCy = this.y + this.size * 0.5;
     for (const other of fishById.values()) {
@@ -490,9 +557,12 @@ class Fish {
       const dy = oy - myCy;
       const d = Math.hypot(dx, dy);
       if (d > NEIGHBOR || d < 0.001) continue;
-      ax += other.vx; ay += other.vy;
-      cx += ox; cy += oy;
-      nAlign++;
+      const sameSpecies = this.species && this.species === other.species;
+      // Same-species: full weight. Different species: light social awareness.
+      const w = sameSpecies ? 1.0 : 0.2;
+      ax += other.vx * w; ay += other.vy * w;
+      cx += ox * w; cy += oy * w;
+      wAlign += w;
       if (d < SEP) {
         const push = (SEP - d) / SEP;
         sx -= (dx / d) * push;
@@ -500,25 +570,149 @@ class Fish {
         nSep++;
       }
     }
-    if (nAlign > 0) {
-      ax /= nAlign; ay /= nAlign;
-      this.vx += (ax - this.vx) * 0.45 * dt;
-      this.vy += (ay - this.vy) * 0.45 * dt;
-      cx = cx / nAlign - myCx;
-      cy = cy / nAlign - myCy;
-      this.vx += cx * 0.18 * dt;
-      this.vy += cy * 0.18 * dt;
+    if (wAlign > 0) {
+      ax /= wAlign; ay /= wAlign;
+      // Tighter alignment + cohesion when same-species neighbors dominate the sum.
+      const alignK = 0.55;
+      const cohesionK = 0.24;
+      this.vx += (ax - this.vx) * alignK * dt;
+      this.vy += (ay - this.vy) * alignK * dt;
+      cx = cx / wAlign - myCx;
+      cy = cy / wAlign - myCy;
+      this.vx += cx * cohesionK * dt;
+      this.vy += cy * cohesionK * dt;
     }
     if (nSep > 0) {
       this.vx += sx * 90 * dt;
       this.vy += sy * 90 * dt;
     }
-    // Clamp speed so boids don't blow up.
+    // Clamp speed so boids don't blow up. Chase/flee raises the ceiling so
+    // fish can actually commit to a pursuit.
+    const burst = (this.encounterState === 'chase' || this.encounterState === 'fleeing') ? 3.8 : 2.8;
     const speed = Math.hypot(this.vx, this.vy);
-    const maxSpeed = this.baseSpeed * 2.8;
+    const maxSpeed = this.baseSpeed * burst;
     if (speed > maxSpeed) {
       this.vx *= maxSpeed / speed;
       this.vy *= maxSpeed / speed;
+    }
+  }
+
+  // ---------- Encounter system ----------
+  // Fish occasionally notice each other and enter a brief interaction:
+  // chase, orbit, or curious approach. Each type has its own steering force.
+  stepEncounter(dt) {
+    if (this.encounterState) {
+      this.encounterTTL -= dt;
+      const t = this.encounterTarget;
+      // End if TTL expired or target vanished / left the school.
+      if (!t || t.mode !== 'school' || !fishById.has(t.id) || this.encounterTTL <= 0) {
+        this.endEncounter();
+      }
+      return;
+    }
+    this.encounterCooldown -= dt;
+    if (this.encounterCooldown > 0) return;
+    this.encounterCooldown = 8 + this.rand() * 18;
+    this.tryInitiateEncounter();
+  }
+
+  tryInitiateEncounter() {
+    const MAX_DIST = 380;
+    const myCx = this.x + this.size * 0.5;
+    const myCy = this.y + this.size * 0.5;
+    const candidates = [];
+    for (const other of fishById.values()) {
+      if (other === this || other.mode !== 'school' || !other.loaded) continue;
+      if (other.encounterState) continue;
+      const ox = other.x + other.size * 0.5;
+      const oy = other.y + other.size * 0.5;
+      const d = Math.hypot(ox - myCx, oy - myCy);
+      if (d > MAX_DIST) continue;
+      candidates.push(other);
+    }
+    if (candidates.length === 0) return;
+    const target = candidates[Math.floor(this.rand() * candidates.length)];
+
+    // Same species → friendly (orbit / curious). Different species → chase is on the table.
+    const sameSpecies = this.species && this.species === target.species;
+    const r = this.rand();
+    let type, dur;
+    if (sameSpecies) {
+      if (r < 0.55) { type = 'orbit';   dur = 2.5 + this.rand() * 2.5; }
+      else          { type = 'curious'; dur = 1.5 + this.rand() * 2.0; }
+    } else {
+      if      (r < 0.45) { type = 'chase';   dur = 2.0 + this.rand() * 2.5; }
+      else if (r < 0.75) { type = 'curious'; dur = 1.8 + this.rand() * 2.0; }
+      else               { type = 'orbit';   dur = 2.5 + this.rand() * 2.0; }
+    }
+
+    this.startEncounter(type, target, dur);
+    if (type === 'chase') target.startEncounter('fleeing', this, dur);
+    else if (type === 'orbit') target.startEncounter('orbit', this, dur);
+    // 'curious' is one-sided — target is unaware.
+  }
+
+  startEncounter(type, target, dur) {
+    this.encounterState = type;
+    this.encounterTarget = target;
+    this.encounterTTL = dur;
+  }
+
+  endEncounter() {
+    this.encounterState = null;
+    this.encounterTarget = null;
+    this.encounterTTL = 0;
+    // Stagger so interacting pairs don't immediately re-engage.
+    this.encounterCooldown = 12 + this.rand() * 20;
+  }
+
+  applyEncounterForce(dt) {
+    if (!this.encounterState || !this.encounterTarget) return;
+    const t = this.encounterTarget;
+    const tCx = t.x + t.size * 0.5;
+    const tCy = t.y + t.size * 0.5;
+    const myCx = this.x + this.size * 0.5;
+    const myCy = this.y + this.size * 0.5;
+    const dx = tCx - myCx, dy = tCy - myCy;
+    const d = Math.hypot(dx, dy) || 1;
+    const ux = dx / d, uy = dy / d;
+    const sp = this.baseSpeed;
+    switch (this.encounterState) {
+      case 'chase': {
+        const vxT = ux * sp * 2.0, vyT = uy * sp * 2.0;
+        this.vx += (vxT - this.vx) * 2.6 * dt;
+        this.vy += (vyT - this.vy) * 2.6 * dt;
+        break;
+      }
+      case 'fleeing': {
+        const vxT = -ux * sp * 2.3, vyT = -uy * sp * 2.3;
+        this.vx += (vxT - this.vx) * 3.0 * dt;
+        this.vy += (vyT - this.vy) * 3.0 * dt;
+        break;
+      }
+      case 'orbit': {
+        // Tangential velocity + soft radial spring so both partners circle
+        // each other at a relatively stable distance.
+        const desired = 90;
+        const tangX = -uy, tangY = ux;
+        const radErr = (d - desired);
+        const vxT = tangX * sp * 0.9 + ux * radErr * 1.2;
+        const vyT = tangY * sp * 0.9 + uy * radErr * 1.2;
+        this.vx += (vxT - this.vx) * 1.8 * dt;
+        this.vy += (vyT - this.vy) * 1.8 * dt;
+        break;
+      }
+      case 'curious': {
+        // Glide toward target, slow as we close, then drift gently past.
+        const desired = 55;
+        const approach = (d - desired) / Math.max(desired, 1);
+        const clamped = Math.max(-0.8, Math.min(1.0, approach));
+        const vxT = ux * sp * 0.9 * clamped;
+        const vyT = uy * sp * 0.9 * clamped;
+        this.vx += (vxT - this.vx) * 1.2 * dt;
+        this.vy += (vyT - this.vy) * 1.2 * dt;
+        break;
+      }
     }
   }
 
@@ -857,6 +1051,7 @@ class Fish {
 
   destroy() {
     cinematicEnd(this);
+    if (this._settleTimer) { clearTimeout(this._settleTimer); this._settleTimer = null; }
     this.shadowEl.remove();
     this.el.remove();
     this.badge.remove();
