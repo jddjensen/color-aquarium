@@ -103,19 +103,19 @@ const PATTERNS = ['wavy', 'darter', 'circler', 'glider', 'zigzag'];
 // slitherer (eel — heavy body wave), glider (sting ray — subtle flap),
 // crawler (sea slug — barely moves), predator (shark — large, solo).
 const SPECIES_TRAITS = {
-  fish1:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.70, speedMul: 1.00, eye: { x: 0.18, y: 0.40, size: 0.11 } },
-  fish2:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00, eye: { x: 0.20, y: 0.38, size: 0.11 } },
-  fish3:     { locomotion: 'swimmer',   yMinF: 0.15, yMaxF: 0.65, speedMul: 1.00, eye: { x: 0.22, y: 0.40, size: 0.11 } },
-  fish4:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.68, speedMul: 1.00, eye: { x: 0.18, y: 0.38, size: 0.11 } },
-  fish5:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00, eye: { x: 0.20, y: 0.38, size: 0.11 } },
-  puffer1:   { locomotion: 'swimmer',   yMinF: 0.28, yMaxF: 0.75, speedMul: 0.75, eye: { x: 0.24, y: 0.42, size: 0.10 } },
-  seahorse1: { locomotion: 'floater',   yMinF: 0.25, yMaxF: 0.70, speedMul: 0.45, eye: { x: 0.45, y: 0.15, size: 0.12 } },
-  eel1:      { locomotion: 'slitherer', yMinF: 0.70, yMaxF: 0.90, speedMul: 0.70, ampMul: 2.6, freqMul: 0.85, eye: { x: 0.08, y: 0.45, size: 0.08 } },
-  stingray1: { locomotion: 'glider',    yMinF: 0.72, yMaxF: 0.90, speedMul: 0.70, ampMul: 0.30, flap: true, eye: { x: 0.35, y: 0.30, size: 0.07 } },
-  seaslug1:  { locomotion: 'crawler',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.20, ampMul: 0.25, freqMul: 0.45, glide: true, eye: { x: 0.82, y: 0.32, size: 0.08 } },
-  shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260, eye: { x: 0.20, y: 0.40, size: 0.06 } },
+  fish1:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.70, speedMul: 1.00 },
+  fish2:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
+  fish3:     { locomotion: 'swimmer',   yMinF: 0.15, yMaxF: 0.65, speedMul: 1.00 },
+  fish4:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.68, speedMul: 1.00 },
+  fish5:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
+  puffer1:   { locomotion: 'swimmer',   yMinF: 0.28, yMaxF: 0.75, speedMul: 0.75 },
+  seahorse1: { locomotion: 'floater',   yMinF: 0.25, yMaxF: 0.70, speedMul: 0.45 },
+  eel1:      { locomotion: 'slitherer', yMinF: 0.70, yMaxF: 0.90, speedMul: 0.70, ampMul: 2.6, freqMul: 0.85 },
+  stingray1: { locomotion: 'glider',    yMinF: 0.72, yMaxF: 0.90, speedMul: 0.70, ampMul: 0.30, flap: true },
+  seaslug1:  { locomotion: 'crawler',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.20, ampMul: 0.25, freqMul: 0.45, glide: true },
+  shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260 },
 };
-const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0, eye: { x: 0.17, y: 0.40, size: 0.10 } };
+const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0 };
 
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
@@ -329,19 +329,6 @@ class Fish {
     this.img.alt = 'fish';
     this.img.draggable = false;
     this.wiggleEl.appendChild(this.img);
-    // Animated eye overlay — a small white eye with a pupil that tracks the
-    // swim direction. Positioned per-species at the "head" of the sprite.
-    this.eyeEl = document.createElement('div');
-    this.eyeEl.className = 'fish-eye';
-    this.pupilEl = document.createElement('div');
-    this.pupilEl.className = 'fish-pupil';
-    this.eyeEl.appendChild(this.pupilEl);
-    const eye = this.traits.eye || { x: 0.17, y: 0.40, size: 0.10 };
-    this.eyeEl.style.left = (eye.x * 100) + '%';
-    this.eyeEl.style.top = (eye.y * 100) + '%';
-    this.eyeEl.style.width = (eye.size * 100) + '%';
-    this.eyeEl.style.height = (eye.size * 100) + '%';
-    this.wiggleEl.appendChild(this.eyeEl);
     this.pitchEl.appendChild(this.wiggleEl);
     this.flipEl.appendChild(this.pitchEl);
     this.el.appendChild(this.flipEl);
@@ -1303,19 +1290,6 @@ class Fish {
       wiggleParts.push(`scaleX(${glide})`);
     }
     this.wiggleEl.style.transform = wiggleParts.join(' ');
-
-    // Pupil look-direction: on-screen we want the pupil to shift toward the
-    // swim direction. The eye lives inside a scaleX(flip) container, so we
-    // multiply x by flip to cancel the mirror (flip is ±1).
-    if (this.pupilEl) {
-      const m = Math.hypot(vx, vy);
-      let lx = 0, ly = 0;
-      if (m > 0.5) {
-        lx = (vx / m) * flip * 28;   // % of pupil eye frame
-        ly = (vy / m) * 28;
-      }
-      this.pupilEl.style.transform = `translate(${lx}%, ${ly}%)`;
-    }
     this.renderShadow(x, y, w, h, vx);
   }
 
@@ -1422,7 +1396,6 @@ class Fish {
     this.badge.remove();
     if (this.splash) this.splash.remove();
     if (this.nameTag) this.nameTag.remove();
-    // eyeEl and pupilEl are descendants of this.el so they're removed above.
   }
 }
 

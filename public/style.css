@@ -606,45 +606,10 @@ body.aquarium {
 .fish-wiggle {
   width: 100%;
   height: 100%;
-  position: relative;
   /* Origin at the head end (sprites face left): keeps the head steady while
      the tail/fins sweep with the skew. */
   transform-origin: 15% 50%;
   will-change: transform;
-}
-
-/* Animated eye overlay — placed in sprite-local coords via inline % styles. */
-.fish-eye {
-  position: absolute;
-  background: radial-gradient(circle at 35% 35%, #ffffff, #eef5fb 70%, #d4e0ea 100%);
-  border: max(1.5px, 0.12em) solid #111;
-  border-radius: 50%;
-  box-sizing: border-box;
-  box-shadow: inset 0 0 2px rgba(0,0,0,.2);
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 2;
-  transform: translate(-50%, -50%);
-}
-.fish-pupil {
-  position: absolute;
-  /* Centered in the eye by left/top/size (no default transform), so JS can
-     own the transform to animate the look direction. */
-  left: 22.5%; top: 22.5%;
-  width: 55%; height: 55%;
-  background: radial-gradient(circle at 35% 30%, #333 0%, #000 70%);
-  border-radius: 50%;
-  transition: transform .18s cubic-bezier(.2,.9,.2,1);
-  will-change: transform;
-}
-.fish-pupil::after {
-  content: "";
-  position: absolute;
-  left: 18%; top: 14%;
-  width: 30%; height: 30%;
-  background: white;
-  border-radius: 50%;
-  opacity: .85;
 }
 .fish-sprite img {
   width: 100%;
