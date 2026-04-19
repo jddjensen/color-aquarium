@@ -107,7 +107,10 @@ const PATTERNS = ['wavy', 'darter', 'circler', 'glider', 'zigzag'];
 // yMinF/yMaxF are fractions of viewport height (0 = top, 1 = bottom).
 // locomotion drives wiggle style: swimmer (default), floater (seahorse),
 // slitherer (eel — heavy body wave), glider (sting ray — subtle flap),
-// crawler (sea slug — barely moves), predator (shark — large, solo).
+// crawler (sea slug — barely moves), predator (shark — large, solo),
+// walker (shrimp — scuttles on the floor, legs hop),
+// clinger (sea star — almost motionless on the floor),
+// jetter (octopus / squid — tentacle-pulse jet propulsion).
 const SPECIES_TRAITS = {
   fish1:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.70, speedMul: 1.00 },
   fish2:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
@@ -120,6 +123,14 @@ const SPECIES_TRAITS = {
   stingray1: { locomotion: 'glider',    yMinF: 0.72, yMaxF: 0.90, speedMul: 0.70, ampMul: 0.30, flap: true },
   seaslug1:  { locomotion: 'crawler',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.20, ampMul: 0.25, freqMul: 0.45, glide: true },
   shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260 },
+  // Sea star — barely moves, clings to the floor. Zero body wiggle.
+  seastar1:  { locomotion: 'clinger',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.08, ampMul: 0.0,  sizeMul: 0.55 },
+  // Shrimp — scuttles along the bottom, legs-in-motion hop via fast wigglePhase.
+  shrimp1:   { locomotion: 'walker',    yMinF: 0.86, yMaxF: 0.96, speedMul: 0.35, ampMul: 0.0,  freqMul: 2.6, sizeMul: 0.58, legs: true },
+  // Octopus — mid-depth jet propulsion, tentacle pulses (slow continuous).
+  octo1:     { locomotion: 'jetter',    yMinF: 0.40, yMaxF: 0.85, speedMul: 0.55, ampMul: 0.0,  freqMul: 0.8, sizeMul: 0.95, jetPulse: true },
+  // Squid — upper/mid water, faster bursty jets with snappier pulses.
+  squid1:    { locomotion: 'jetter',    yMinF: 0.22, yMaxF: 0.68, speedMul: 0.85, ampMul: 0.0,  freqMul: 1.1, sizeMul: 0.90, jetPulse: true, burst: true },
 };
 const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0 };
 
@@ -136,6 +147,10 @@ const SPECIES_ARRIVALS = {
   stingray1: { effect: 'sand',    path: 'glide',   splashBand: [0.72, 0.82], endYF: 0.74, sway: 0.2,  scaleMul: 1.08 },
   seaslug1:  { effect: 'silt',    path: 'heavy',   splashBand: [0.82, 0.9],  endYF: 0.86, sway: 0.18, scaleMul: 0.9 },
   shark1:    { effect: 'wake',    path: 'heavy',   splashBand: [0.34, 0.46], endYF: 0.48, sway: 0.12, scaleMul: 1.14, spotlight: 'predator' },
+  seastar1:  { effect: 'sand',    path: 'heavy',   splashBand: [0.86, 0.92], endYF: 0.92, sway: 0.1,  scaleMul: 0.85 },
+  shrimp1:   { effect: 'silt',    path: 'heavy',   splashBand: [0.82, 0.9],  endYF: 0.9,  sway: 0.22, scaleMul: 0.85 },
+  octo1:     { effect: 'bubbles', path: 'floaty',  splashBand: [0.42, 0.55], endYF: 0.6,  sway: 0.55, scaleMul: 1.0 },
+  squid1:    { effect: 'ribbon',  path: 'slink',   splashBand: [0.28, 0.4],  endYF: 0.46, sway: 0.5,  scaleMul: 0.95 },
 };
 const DEFAULT_ARRIVAL = { effect: 'glow', path: 'playful', splashBand: [0.24, 0.34], endYF: 0.54, sway: 0.55, scaleMul: 1 };
 const warnedArrivalSpecies = new Set();
@@ -601,7 +616,8 @@ class Fish {
     const myCx = this.x + this.size * 0.5;
     const myCy = this.y + this.size * 0.5;
     const steer = ageSchool * ageSchool;
-    const pull = (this.locomotion === 'predator' || this.locomotion === 'crawler') ? 0.18 : 0.3;
+    const bottomDweller = this.locomotion === 'crawler' || this.locomotion === 'walker' || this.locomotion === 'clinger';
+    const pull = (this.locomotion === 'predator' || bottomDweller) ? 0.18 : 0.3;
     this.vx += (anchor.x - myCx) * pull * steer * dt;
     this.vy += (anchor.y - myCy) * (pull * 1.2) * steer * dt;
   }
@@ -649,7 +665,8 @@ class Fish {
   }
 
   stepGlassCuriosity(dt, tMs, W, H, events) {
-    if (this.mode !== 'school' || this.locomotion === 'crawler') return;
+    if (this.mode !== 'school') return;
+    if (this.locomotion === 'crawler' || this.locomotion === 'walker' || this.locomotion === 'clinger') return;
     if (events?.feeding || events?.surge || this.isIdle) {
       this.glassCuriosityTTL = 0;
       this.glassCuriosityTarget = null;
@@ -693,7 +710,8 @@ class Fish {
     const myCx = this.x + this.size * 0.5;
     const myCy = this.y + this.size * 0.5;
 
-    if (events.surge && this.locomotion !== 'crawler') {
+    const sceneBottomDweller = this.locomotion === 'crawler' || this.locomotion === 'walker' || this.locomotion === 'clinger';
+    if (events.surge && !sceneBottomDweller) {
       const age = (tMs - events.surge.startedAt) / events.surge.duration;
       const pulse = Math.sin(Math.PI * Math.max(0, Math.min(1, age)));
       const participation = this.isShark ? 0.45 : this.locomotion === 'floater' ? 0.62 : 0.92;
@@ -701,7 +719,7 @@ class Fish {
       this.vy += events.surge.dy * participation * pulse * dt;
     }
 
-    if (events.feeding && this.locomotion !== 'crawler') {
+    if (events.feeding && !sceneBottomDweller) {
       const dx = events.feeding.x - myCx;
       const dy = events.feeding.y - myCy;
       const d = Math.hypot(dx, dy) || 1;
@@ -786,6 +804,9 @@ class Fish {
       // Locomotion-specific behavior by species.
       switch (this.locomotion) {
         case 'crawler':   this.stepCrawler(dt); break;
+        case 'walker':    this.stepWalker(dt); break;
+        case 'clinger':   this.stepClinger(dt); break;
+        case 'jetter':    this.stepJetter(dt, W, H); break;
         case 'predator':  this.stepPredator(dt, W, H); break;
         case 'floater':   this.stepFloater(dt, W, H); break;
         case 'slitherer': this.stepSlitherer(dt, W, H); break;
@@ -872,7 +893,9 @@ class Fish {
 
   applyFlocking(dt, schoolFish) {
     // Solitary / sedentary animals don't school.
-    if (this.locomotion === 'predator' || this.locomotion === 'crawler') return;
+    if (this.locomotion === 'predator' || this.locomotion === 'crawler'
+        || this.locomotion === 'walker' || this.locomotion === 'clinger'
+        || this.locomotion === 'jetter') return;
     const ageSchool = this.layer?.progress || 0;
     // Species-weighted boids + extra same-species cohesion pass, so fish of
     // the same kind group into tight shoals while different species stay
@@ -960,8 +983,9 @@ class Fish {
   // Fish occasionally notice each other and enter a brief interaction:
   // chase, orbit, or curious approach. Each type has its own steering force.
   stepEncounter(dt, schoolFish) {
-    // Predators and bottom-crawlers don't play the social-encounter game.
-    if (this.locomotion === 'predator' || this.locomotion === 'crawler') return;
+    // Predators and bottom-dwellers don't play the social-encounter game.
+    if (this.locomotion === 'predator' || this.locomotion === 'crawler'
+        || this.locomotion === 'walker' || this.locomotion === 'clinger') return;
     if (this.encounterState) {
       this.encounterTTL -= dt;
       const t = this.encounterTarget;
@@ -986,7 +1010,8 @@ class Fish {
       if (other === this) continue;
       if (other.encounterState) continue;
       // Skip sharks (intimidating) and sea slugs (oblivious) as encounter partners.
-      if (other.locomotion === 'predator' || other.locomotion === 'crawler') continue;
+      if (other.locomotion === 'predator' || other.locomotion === 'crawler'
+          || other.locomotion === 'walker' || other.locomotion === 'clinger') continue;
       const ox = other.x + other.size * 0.5;
       const oy = other.y + other.size * 0.5;
       const d = Math.hypot(ox - myCx, oy - myCy);
@@ -1144,6 +1169,105 @@ class Fish {
     this.vy += (targetVy - this.vy) * 0.9 * dt;
   }
 
+  stepWalker(dt) {
+    // Shrimp: scuttles along the bottom. Short walking stretches, occasional
+    // pauses, rare direction flips. Legs-in-motion hop is added by the
+    // renderer from wigglePhase (traits.legs).
+    if (this._walkState === undefined) {
+      this._walkState = 'walk';
+      this._walkStateTTL = 3 + this.rand() * 4;
+      this._walkDir = this.rand() < 0.5 ? -1 : 1;
+    }
+    this._walkStateTTL -= dt;
+    if (this._walkStateTTL <= 0) {
+      if (this._walkState === 'walk') {
+        if (this.rand() < 0.35) {
+          this._walkState = 'pause';
+          this._walkStateTTL = 1.5 + this.rand() * 2.5;
+        } else {
+          if (this.rand() < 0.4) this._walkDir = -this._walkDir;
+          this._walkStateTTL = 4 + this.rand() * 5;
+        }
+      } else {
+        this._walkState = 'walk';
+        this._walkStateTTL = 3 + this.rand() * 4;
+      }
+    }
+    const walkSpeed = Math.max(18, this.baseSpeed * 1.5);
+    const targetVx = this._walkState === 'walk' ? this._walkDir * walkSpeed : 0;
+    // Tiny vertical bob so the shrimp visibly "steps" while moving.
+    const stepping = this._walkState === 'walk' ? 1 : 0.2;
+    const targetVy = Math.sin(this.wigglePhase * 2) * 2.5 * stepping;
+    this.vx += (targetVx - this.vx) * 1.4 * dt;
+    this.vy += (targetVy - this.vy) * 1.0 * dt;
+  }
+
+  stepClinger(dt) {
+    // Sea star: clings to the floor, mostly motionless. Rare slow slides
+    // between long pauses. No vertical drift — stays pinned to the seabed.
+    if (this._clingTTL === undefined) {
+      this._clingTTL = 15 + this.rand() * 25;
+      this._clingMoving = false;
+      this._clingDir = this.rand() < 0.5 ? -1 : 1;
+    }
+    this._clingTTL -= dt;
+    if (this._clingTTL <= 0) {
+      if (this._clingMoving) {
+        this._clingMoving = false;
+        this._clingTTL = 18 + this.rand() * 30;
+      } else {
+        this._clingMoving = true;
+        this._clingTTL = 5 + this.rand() * 8;
+        if (this.rand() < 0.5) this._clingDir = -this._clingDir;
+      }
+    }
+    const crawl = Math.max(3, this.baseSpeed * 0.25);
+    const targetVx = this._clingMoving ? this._clingDir * crawl : 0;
+    this.vx += (targetVx - this.vx) * 0.5 * dt;
+    this.vy += (0 - this.vy) * 1.4 * dt;
+  }
+
+  stepJetter(dt, W, H) {
+    // Octopus & squid: jet propulsion — calm drifting glide punctuated by
+    // tentacle-pulse bursts. Squids (traits.burst) pulse harder and more
+    // frequently than octopuses. The tentacle ripple itself is rendered
+    // from wigglePhase (traits.jetPulse).
+    const burst = !!this.traits.burst;
+    if (this._jetPhase === undefined) {
+      this._jetPhase = 'glide';
+      this._jetTTL = 2 + this.rand() * 3;
+      this._jetHeading = this.rand() * Math.PI * 2;
+    }
+    this._jetTTL -= dt;
+    if (this._jetTTL <= 0) {
+      if (this._jetPhase === 'glide') {
+        this._jetPhase = 'pulse';
+        this._jetTTL = burst ? 0.35 + this.rand() * 0.3 : 0.6 + this.rand() * 0.4;
+        // Pick a new jet direction, biased horizontally so movement reads
+        // as swimming rather than random drift.
+        const horiz = (this.rand() < 0.5 ? -1 : 1);
+        const drift = (this.rand() - 0.5) * 0.8;
+        this._jetHeading = Math.atan2(drift, horiz);
+      } else {
+        this._jetPhase = 'glide';
+        this._jetTTL = burst ? 1.6 + this.rand() * 2.0 : 2.8 + this.rand() * 3.0;
+      }
+    }
+    const sp = this.baseSpeed;
+    if (this._jetPhase === 'pulse') {
+      const boost = burst ? 3.2 : 2.0;
+      const vxT = Math.cos(this._jetHeading) * sp * boost;
+      const vyT = Math.sin(this._jetHeading) * sp * boost * 0.6;
+      this.vx += (vxT - this.vx) * 4.0 * dt;
+      this.vy += (vyT - this.vy) * 4.0 * dt;
+    } else {
+      // Drift: bleed off the pulse speed but keep gentle tentacle-driven bob.
+      this.vx *= Math.pow(0.5, dt);
+      this.vy *= Math.pow(0.5, dt);
+      this.vy += Math.sin(this.wigglePhase) * 4 * dt;
+    }
+  }
+
   stepPredator(dt) {
     // Shark: slow relentless cruise, occasional long turns.
     this.turnTimer -= dt;
@@ -1200,9 +1324,11 @@ class Fish {
   }
 
   stepIdle(dt, tMs) {
-    // Predators / floaters / crawlers have their own pacing; skip random pauses.
+    // Locomotions that already have their own pacing skip random idle pauses.
     if (this.locomotion === 'predator' || this.locomotion === 'crawler'
-        || this.locomotion === 'floater' || this.locomotion === 'glider') return;
+        || this.locomotion === 'floater' || this.locomotion === 'glider'
+        || this.locomotion === 'walker' || this.locomotion === 'clinger'
+        || this.locomotion === 'jetter') return;
     if (this.isIdle) {
       this.idleDuration -= dt;
       if (this.idleDuration <= 0) {
@@ -1534,6 +1660,23 @@ class Fish {
       const moving = Math.min(1, Math.abs(vx) / 20);
       const glide = 1 + Math.sin(this.wigglePhase * 0.55) * 0.05 * (0.3 + 0.7 * moving);
       wiggleParts.push(`scaleX(${glide})`);
+    }
+    if (this.traits && this.traits.jetPulse) {
+      // Octopus / squid tentacle pulse: body squeezes vertically while
+      // tentacles billow out, then relaxes. Squids (burst) pulse harder.
+      const burst = !!this.traits.burst;
+      const pulseAmp = burst ? 0.14 : 0.09;
+      const s = Math.sin(this.wigglePhase);
+      const sy = 1 + s * pulseAmp;
+      const sx = 1 - s * pulseAmp * 0.5;
+      wiggleParts.push(`scaleY(${sy}) scaleX(${sx})`);
+    }
+    if (this.traits && this.traits.legs) {
+      // Shrimp leg-step: small vertical hop driven by the fast wiggle phase,
+      // damped while paused so stationary shrimp don't visibly bounce.
+      const moving = Math.min(1, Math.abs(vx) / 14);
+      const hop = -Math.abs(Math.sin(this.wigglePhase)) * 2.4 * (0.25 + 0.75 * moving);
+      wiggleParts.push(`translateY(${hop.toFixed(2)}px)`);
     }
     this.wiggleEl.style.transform = wiggleParts.join(' ');
     this.renderShadow(x, y, w, h, vx);

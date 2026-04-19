@@ -47,6 +47,10 @@ SPECIES_LABELS = {
     "stingray1": "Sting Ray",
     "seaslug1": "Sea Slug",
     "shark1": "Shark",
+    "octo1": "Octopus",
+    "shrimp1": "Shrimp",
+    "squid1": "Squid",
+    "seastar1": "Sea Star",
 }
 
 os.makedirs(SUBMISSIONS, exist_ok=True)

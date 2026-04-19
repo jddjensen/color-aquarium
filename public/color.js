@@ -13,6 +13,10 @@ const FISH = [
   { id: 'stingray1',src: '/assets/stingray1.png',label: 'Sting Ray' },
   { id: 'seaslug1', src: '/assets/seaslug1.png', label: 'Sea Slug' },
   { id: 'shark1',   src: '/assets/shark1.png',   label: 'Shark' },
+  { id: 'octo1',    src: '/assets/octo1.png',    label: 'Octopus' },
+  { id: 'shrimp1',  src: '/assets/shrimp1.png',  label: 'Shrimp' },
+  { id: 'squid1',   src: '/assets/squid1.png',   label: 'Squid' },
+  { id: 'seastar1', src: '/assets/seastar1.png', label: 'Sea Star' },
 ];
 
 const PALETTE = [
