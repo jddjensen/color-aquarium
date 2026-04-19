@@ -55,9 +55,6 @@ class Fish {
     this.name = (meta.name || '').trim();
     this.species = (meta.species || '').toLowerCase();
     this.isPuffer = this.species === 'puffer1';
-    this.isClown = this.species === 'fish3';
-    // Puffers hold their breath; clownfish apparently don't bubble either.
-    this.emitsBubbles = !(this.isPuffer || this.isClown);
     // Puff-up state: 0..1 scale overlay on the sprite.
     this.puffLevel = 0;
     this.puffTarget = 0;
@@ -221,12 +218,10 @@ class Fish {
     this.updateNameTag(tMs);
 
     // Occasional bubble emission from the fish's head region.
-    if (this.emitsBubbles) {
-      this.bubbleTimer -= dt;
-      if (this.bubbleTimer <= 0) {
-        this.bubbleTimer = 4 + this.rand() * 8;
-        this.emitBubble(w, h);
-      }
+    this.bubbleTimer -= dt;
+    if (this.bubbleTimer <= 0) {
+      this.bubbleTimer = 4 + this.rand() * 8;
+      this.emitBubble(w, h);
     }
 
     // Puffer-only: rare puff-up behavior.
@@ -237,20 +232,11 @@ class Fish {
     this.puffTimer -= dt;
     if (this.puffTimer <= 0 && this.puffTarget === 0) {
       this.puffTarget = 1;
-      // Stay puffed briefly, then deflate.
       setTimeout(() => { this.puffTarget = 0; }, 1400 + this.rand() * 800);
-      // Schedule the next puff far in the future so it's rare.
       this.puffTimer = 60 + this.rand() * 120;
-      // A puff emits a little ring of bubbles even for puffers.
-      const aspect = this.naturalW / this.naturalH;
-      const h = this.size;
-      const w = h * aspect;
-      for (let i = 0; i < 6; i++) this.emitBubble(w, h);
-      // Pause and hold position while puffed.
       this.isIdle = true;
       this.idleDuration = 1.8;
     }
-    // Ease toward target (inflate fast, deflate slower).
     const speed = this.puffTarget > this.puffLevel ? 3.5 : 1.4;
     this.puffLevel += (this.puffTarget - this.puffLevel) * Math.min(1, speed * dt);
   }
