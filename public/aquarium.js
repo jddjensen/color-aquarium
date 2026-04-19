@@ -112,7 +112,7 @@ const SPECIES_TRAITS = {
   seahorse1: { locomotion: 'floater',   yMinF: 0.25, yMaxF: 0.70, speedMul: 0.45 },
   eel1:      { locomotion: 'slitherer', yMinF: 0.70, yMaxF: 0.90, speedMul: 0.70, ampMul: 2.6, freqMul: 0.85 },
   stingray1: { locomotion: 'glider',    yMinF: 0.72, yMaxF: 0.90, speedMul: 0.70, ampMul: 0.30, flap: true },
-  seaslug1:  { locomotion: 'crawler',   yMinF: 0.92, yMaxF: 0.98, speedMul: 0.15, ampMul: 0.00 },
+  seaslug1:  { locomotion: 'crawler',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.20, ampMul: 0.25, freqMul: 0.45, glide: true },
   shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260 },
 };
 const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0 };
@@ -369,10 +369,11 @@ class Fish {
     this.wavePeriod = 1.6 + this.rand() * 2.2;
     this.wavePhase = this.rand() * Math.PI * 2;
     this.turnTimer = 0;
-    // Tail-beat: humans read fish as calm when the tail sweeps slowly, ~1–2 Hz.
-    // Keep the base modest; speed scaling pushes it gently upward.
-    this.wiggleBase = 0.55 + this.rand() * 0.35;     // 0.55 – 0.9 Hz base
-    this.wiggleAmpBase = 0.09 + this.rand() * 0.05;  // 0.09 – 0.14 rad (5°–8°)
+    // Tail-beat: very slow and very minimal — the body wiggle is a subtle
+    // secondary motion, not the fish's main expression. Base tops out near
+    // ~0.45 Hz with ~3° of sweep; species traits (eel, etc.) scale from here.
+    this.wiggleBase = 0.25 + this.rand() * 0.20;     // 0.25 – 0.45 Hz base
+    this.wiggleAmpBase = 0.04 + this.rand() * 0.03;  // 0.04 – 0.07 rad (2.3°–4°)
     this.wigglePhase = this.rand() * Math.PI * 2;
     this._wiggleFreq = this.wiggleBase;              // updated per frame
     this.dartCooldown = 0.8 + this.rand() * 1.6;
@@ -486,6 +487,13 @@ class Fish {
     // position to jump — previously it was derived from wall-clock * freq,
     // which produced the "seizure" jitter whenever speed fluctuated.
     this.stepWigglePhase(dtMs / 1000);
+
+    // Reset-hotspot triggers a graceful swim-off; once the sprite clears the
+    // viewport it self-destroys.
+    if (this.departing) {
+      this.stepDeparting(dtMs / 1000, W, H, aspect);
+      return;
+    }
 
     if (this.mode === 'featured') {
       this.updateFeatured(tMs, W, H, aspect);
@@ -821,15 +829,42 @@ class Fish {
 
   // ---------- Locomotion helpers ----------
   stepCrawler(dt) {
-    // Sea slug: barely moves. Heavy drag + rare nudge to a new spot.
-    this.vx *= Math.pow(0.35, dt);
-    this.vy *= Math.pow(0.25, dt);
-    this.turnTimer -= dt;
-    if (this.turnTimer <= 0) {
-      this.turnTimer = 10 + this.rand() * 25;
-      this.vx = (this.rand() - 0.5) * this.baseSpeed * 2.2;
-      this.vy = (this.rand() - 0.5) * 4;
+    // Sea slug: continuous slow glide punctuated by long pauses. Velocity
+    // eases toward a target instead of snapping, so no jerky nudges.
+    if (this._crawlState === undefined) {
+      this._crawlState = 'walk';
+      this._crawlStateTTL = 6 + this.rand() * 8;
+      this._crawlDir = this.rand() < 0.5 ? -1 : 1;
     }
+    this._crawlStateTTL -= dt;
+    if (this._crawlStateTTL <= 0) {
+      if (this._crawlState === 'walk') {
+        // Coming off a walk: half the time pause, otherwise reverse and keep going.
+        if (this.rand() < 0.55) {
+          this._crawlState = 'pause';
+          this._crawlStateTTL = 4 + this.rand() * 6;
+        } else {
+          this._crawlDir = -this._crawlDir;
+          this._crawlStateTTL = 8 + this.rand() * 10;
+        }
+      } else {
+        this._crawlState = 'walk';
+        this._crawlStateTTL = 9 + this.rand() * 10;
+        // Sometimes resume the other way after resting.
+        if (this.rand() < 0.35) this._crawlDir = -this._crawlDir;
+      }
+    }
+
+    // Target horizontal speed: slow but constant during walk, zero when paused.
+    const walkSpeed = Math.max(10, this.baseSpeed * 1.3);
+    const targetVx = this._crawlState === 'walk' ? this._crawlDir * walkSpeed : 0;
+    // Tiny seabed hover using the shared wiggle phase so the slug's body ripple
+    // and its vertical float stay in sync (reads as one breathing motion).
+    const targetVy = Math.sin(this.wigglePhase) * 1.5;
+
+    // Gentle lerp toward the target — no sudden velocity jumps.
+    this.vx += (targetVx - this.vx) * 1.1 * dt;
+    this.vy += (targetVy - this.vy) * 0.9 * dt;
   }
 
   stepPredator(dt) {
@@ -1150,29 +1185,35 @@ class Fish {
   }
 
   stepWigglePhase(dt) {
-    // Tail-beat frequency: modest at rest, saturating smoothly with speed.
-    // tanh keeps fast-moving fish from going frenetic (caps near ~1.7× base).
+    // Tail-beat frequency: tiny lift from speed, tightly bounded so even
+    // darting fish stay visibly calm.
     const speed = Math.hypot(this.vx, this.vy);
-    const speedK = 1.0 + 0.7 * Math.tanh(speed / 110);
-    const dartBoost = this.dartPhase === 'dart' ? 1.2 : 1;
+    const speedK = 1.0 + 0.35 * Math.tanh(speed / 140);
+    const dartBoost = this.dartPhase === 'dart' ? 1.1 : 1;
     this._wiggleFreq = this.wiggleBase * speedK * dartBoost;
     this.wigglePhase += dt * this._wiggleFreq * Math.PI * 2;
   }
 
   renderSprite(x, y, w, h, vx, vy) {
     const speed = Math.hypot(vx, vy);
-    // Amplitude grows smoothly with speed via tanh so it saturates instead of
-    // ballooning into over-bent contortions at dart speed.
-    const speedAmp = 0.85 + 0.35 * Math.tanh(speed / 120);
-    const dartBoost = this.dartPhase === 'dart' ? 1.25 : 1;
+    // Very minimal amplitude variation with speed — we want the wiggle to
+    // stay subtle regardless of how fast the animal is moving.
+    const speedAmp = 0.9 + 0.2 * Math.tanh(speed / 140);
+    const dartBoost = this.dartPhase === 'dart' ? 1.12 : 1;
     const shapeScale = this.isSeahorse ? 0.55 : 1;
     const ampRad = this.wiggleAmpBase * speedAmp * dartBoost * shapeScale;
-    // Single sinusoid = clean sweep of the tail. The body-length pulse that
-    // used to run at 2× frequency is removed — it was fighting the wave.
+    // Single sinusoid = clean sweep of the tail.
     const skewY = Math.sin(this.wigglePhase) * ampRad;
 
-    const movingRight = vx > 0;
-    const flip = movingRight ? -1 : 1;
+    // Flip hysteresis: only update facing when velocity is large enough to
+    // commit to a direction. Prevents slow-moving animals (sea slug, seahorse)
+    // from visually flickering when vx crosses zero near a stop.
+    if (Math.abs(vx) > 8) {
+      this._lastFlip = vx > 0 ? -1 : 1;
+    } else if (this._lastFlip === undefined) {
+      this._lastFlip = 1;
+    }
+    const flip = this._lastFlip;
 
     const mag = Math.hypot(vx, vy) || 1;
     const nx = vx / mag, ny = vy / mag;
@@ -1193,10 +1234,19 @@ class Fish {
     this.flipEl.style.transform = `scaleX(${flip})`;
     this.pitchEl.style.transform = `rotate(${clamped}rad)`;
     // Sting rays get a subtle vertical "wing flap" on top of the tail skew.
+    // Sea slugs get an inchworm-style horizontal pulse (stretches while
+    // moving forward, compresses during pauses) instead of a fish tail.
     const wiggleParts = [`skewY(${skewY}rad)`];
     if (this.traits && this.traits.flap) {
-      const flap = 1 + Math.sin(this.wigglePhase * 0.6) * 0.12;
+      const flap = 1 + Math.sin(this.wigglePhase * 0.6) * 0.07;
       wiggleParts.push(`scaleY(${flap})`);
+    }
+    if (this.traits && this.traits.glide) {
+      // Stretch/compress along the body by ~5%, slower than wiggle, amplitude
+      // scaled by how much the slug is currently moving.
+      const moving = Math.min(1, Math.abs(vx) / 20);
+      const glide = 1 + Math.sin(this.wigglePhase * 0.55) * 0.05 * (0.3 + 0.7 * moving);
+      wiggleParts.push(`scaleX(${glide})`);
     }
     this.wiggleEl.style.transform = wiggleParts.join(' ');
     this.renderShadow(x, y, w, h, vx);
@@ -1237,6 +1287,64 @@ class Fish {
     this.nameTag.style.transform = `translate(${cx}px, ${topY}px) translate(-50%, -100%)`;
     if (show && !this.nameTag.classList.contains('show')) this.nameTag.classList.add('show');
     else if (!show && this.nameTag.classList.contains('show')) this.nameTag.classList.remove('show');
+  }
+
+  // Graceful exit when the aquarium is reset: pick the nearest horizontal
+  // edge and swim off-screen at boosted speed. Once out of view, the fish
+  // tears itself down and drops from fishById.
+  departToEdge() {
+    if (this.departing) return;
+    this.departing = true;
+    // Remove from the cinematic pipeline so queued fish don't block the exit.
+    const qi = cinematicQueue.indexOf(this);
+    if (qi >= 0) cinematicQueue.splice(qi, 1);
+    this.cinematicPending = false;
+    cinematicEnd(this);
+    if (this.splash) { this.splash.remove(); this.splash = null; }
+    this.badge.remove();
+    // Cancel every in-progress behavioral state.
+    this.encounterState = null;
+    this.encounterTarget = null;
+    this.scareTTL = 0;
+    this.isIdle = false;
+    this.puffTarget = 0;
+    // Choose exit side: whichever edge is closer.
+    const W = window.innerWidth;
+    const myCx = (this.x || 0) + (this.size || 100) * 0.5;
+    this._departSign = myCx < W / 2 ? -1 : 1;
+    this._departVy = (Math.random() - 0.5) * 40;
+    // Featured-style highlight while departing looks nice; remove it so the
+    // sprite rides its normal depth filter on the way out.
+    this.el.classList.remove('featured-mode');
+    this.el.classList.remove('school-settling');
+    if (this.mode === 'featured') this.mode = 'school';
+  }
+
+  stepDeparting(dt, W, H, aspect) {
+    // Aim for an exit speed that clears the viewport in ~2 seconds regardless
+    // of screen size, so the reset is punchy but still visibly a swim-away.
+    const exitSpeed = Math.max(400, W / 2.0);
+    const targetVx = this._departSign * exitSpeed;
+    this.vx += (targetVx - this.vx) * 2.8 * dt;
+    this.vy += (this._departVy - this.vy) * 1.6 * dt;
+
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+
+    const h = this.size;
+    const w = h * aspect;
+
+    // Soft vertical wall so fish don't fly out the top/bottom while heading out.
+    if (this.y < 20) { this.y = 20; this.vy = Math.abs(this.vy); }
+    if (this.y > H - h - 10) { this.y = H - h - 10; this.vy = -Math.abs(this.vy); }
+
+    this.renderSprite(this.x, this.y, w, h, this.vx, this.vy);
+    this.updateNameTag(0);
+
+    if (this.x < -w - 60 || this.x > W + 60) {
+      this.destroy();
+      fishById.delete(this.id);
+    }
   }
 
   destroy() {
@@ -1460,6 +1568,8 @@ async function poll() {
 
     for (const [id, f] of fishById) {
       if (!serverIds.has(id)) {
+        // Let already-departing fish finish their swim-off animation.
+        if (f.departing) continue;
         f.destroy();
         fishById.delete(id);
       }
@@ -1482,8 +1592,8 @@ if (resetBtn) {
     try {
       const r = await fetch('/api/reset', { method: 'POST' });
       if (!r.ok) throw new Error('reset failed');
-      for (const f of fishById.values()) f.destroy();
-      fishById.clear();
+      // Have every current fish swim off-screen; they self-destroy on exit.
+      for (const f of fishById.values()) f.departToEdge();
       countEl.textContent = '0 fish today';
     } catch (e) {
       console.warn(e);
