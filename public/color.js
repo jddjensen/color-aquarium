@@ -60,6 +60,8 @@ const fishGridEl = document.getElementById('fishGrid');
 const acceptBtn = document.getElementById('acceptFish');
 const coloringViewEl = document.getElementById('coloringView');
 const changeFishBtn = document.getElementById('changeFish');
+const submitBtn = document.getElementById('submit');
+const submitHintEl = document.getElementById('submitHint');
 
 // Offscreen layers (sized to canvas)
 const artCanvas   = document.createElement('canvas'); // the fish line art
@@ -253,6 +255,9 @@ let stickerPreview = null;
 const STICKER_CANVAS_SIZE = 120; // size in canvas px when placed
 let backgroundRemovalPipelinePromise = null;
 let backgroundRemovalUnavailable = false;
+const MIN_DECORATED_PIXELS = 120;
+let hasMeaningfulDecorationState = false;
+let strokeNeedsDecorationRecount = false;
 
 // ---------- Fish-select screen ----------
 FISH.forEach((f) => {
@@ -304,6 +309,7 @@ function returnToSelectView() {
   pendingFish = null;
   currentFish = null;
   acceptBtn.disabled = true;
+  setMeaningfulDecorationState(false);
 
   coloringViewEl.classList.add('entering');
   setTimeout(() => {
@@ -324,6 +330,67 @@ function anyPaintApplied() {
     return false;
   } catch {
     return false;
+  }
+}
+
+function setMeaningfulDecorationState(ready) {
+  hasMeaningfulDecorationState = ready;
+  updateSubmitState();
+}
+
+function recountMeaningfulDecoration() {
+  try {
+    const d = paintCtx.getImageData(0, 0, paintCanvas.width, paintCanvas.height).data;
+    let count = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i + 3] <= 12) continue;
+      if (d[i] + d[i + 1] + d[i + 2] >= WHITE_THRESHOLD) continue;
+      count++;
+      if (count >= MIN_DECORATED_PIXELS) {
+        setMeaningfulDecorationState(true);
+        return true;
+      }
+    }
+    setMeaningfulDecorationState(false);
+    return false;
+  } catch {
+    setMeaningfulDecorationState(false);
+    return false;
+  }
+}
+
+function hasMeaningfulDecoration() {
+  return hasMeaningfulDecorationState;
+}
+
+function isMeaningfulPaintColor(color) {
+  const { r, g, b } = hexToRgb(color);
+  return (r + g + b) < WHITE_THRESHOLD;
+}
+
+function currentActionAddsMeaningfulDecoration() {
+  if (currentTool === 'sticker' || currentTool === 'sparkle' || currentTool === 'glitter') return true;
+  if (currentTool === 'brush' || currentTool === 'fill') return isMeaningfulPaintColor(currentColor);
+  return false;
+}
+
+function currentActionNeedsDecorationRecount() {
+  if (currentTool === 'eraser') return true;
+  return (currentTool === 'brush' || currentTool === 'fill') && !isMeaningfulPaintColor(currentColor);
+}
+
+function currentStrokeNeedsDecorationRecount() {
+  if (hasMeaningfulDecorationState) return currentActionNeedsDecorationRecount();
+  return currentActionAddsMeaningfulDecoration();
+}
+
+function updateSubmitState() {
+  const ready = hasMeaningfulDecorationState;
+  if (submitBtn) submitBtn.disabled = !ready;
+  if (submitHintEl) {
+    submitHintEl.textContent = ready
+      ? 'Your fish is ready for the aquarium.'
+      : 'Add some color, glitter, or stickers before sending your fish.';
   }
 }
 
@@ -556,6 +623,7 @@ document.getElementById('clear').addEventListener('click', () => {
   pushUndo();
   paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
   render();
+  setMeaningfulDecorationState(false);
 });
 
 document.getElementById('undo').addEventListener('click', () => {
@@ -563,9 +631,9 @@ document.getElementById('undo').addEventListener('click', () => {
   const data = undoStack.pop();
   paintCtx.putImageData(data, 0, 0);
   render();
+  recountMeaningfulDecoration();
 });
-
-document.getElementById('submit').addEventListener('click', submit);
+submitBtn?.addEventListener('click', submit);
 
 // ---------- Load fish ----------
 function loadFish(fish) {
@@ -588,6 +656,7 @@ function loadFish(fish) {
     buildPaintMask();
     undoStack.length = 0;
     render();
+    setMeaningfulDecorationState(false);
   };
   img.src = fish.src;
 }
@@ -669,6 +738,7 @@ canvas.addEventListener('pointerdown', (ev) => {
   ev.preventDefault();
   canvas.setPointerCapture(ev.pointerId);
   const p = canvasPoint(ev);
+  strokeNeedsDecorationRecount = false;
 
   if (currentTool === 'sticker') {
     pushUndo();
@@ -682,11 +752,17 @@ canvas.addEventListener('pointerdown', (ev) => {
     floodFill(Math.round(p.x), Math.round(p.y), currentColor);
     applyMask();
     render();
+    if (hasMeaningfulDecorationState) {
+      if (currentActionNeedsDecorationRecount()) recountMeaningfulDecoration();
+    } else if (currentActionAddsMeaningfulDecoration()) {
+      setMeaningfulDecorationState(true);
+    }
     return;
   }
   if (currentTool === 'glitter') {
     drawing = true;
     lastPt = p;
+    strokeNeedsDecorationRecount = currentStrokeNeedsDecorationRecount();
     emitGlitter(p);
     applyMask();
     render();
@@ -694,6 +770,7 @@ canvas.addEventListener('pointerdown', (ev) => {
   }
   drawing = true;
   lastPt = p;
+  strokeNeedsDecorationRecount = currentStrokeNeedsDecorationRecount();
   sparkleHue = (sparkleHue + 17) % 360; // start each stroke at a fresh hue
   strokeAt(p, p);
   applyMask();
@@ -726,6 +803,8 @@ function endStroke(ev) {
   if (!drawing) return;
   drawing = false;
   lastPt = null;
+  if (strokeNeedsDecorationRecount) recountMeaningfulDecoration();
+  strokeNeedsDecorationRecount = false;
   try { canvas.releasePointerCapture(ev.pointerId); } catch {}
 }
 canvas.addEventListener('pointerup', endStroke);
@@ -869,6 +948,7 @@ function commitStickerPreview(ev) {
   paintCtx.drawImage(img, p.x - size / 2, p.y - size / 2, size, size);
   applyMask();
   render();
+  if (!hasMeaningfulDecorationState) recountMeaningfulDecoration();
 }
 
 // ---------- Flood fill (bounded by line art) ----------
@@ -981,9 +1061,14 @@ function opaqueBounds(img) {
 }
 
 async function submit() {
-  const btn = document.getElementById('submit');
+  const btn = submitBtn;
+  if (!btn) return;
   const nameInput = document.getElementById('fishName');
   const fishName = (nameInput?.value || '').trim().slice(0, 20);
+  if (!hasMeaningfulDecoration() && !recountMeaningfulDecoration()) {
+    toast('Color your fish first so it is not plain white.');
+    return;
+  }
   btn.disabled = true;
   const original = btn.textContent;
   btn.textContent = 'Polishing scales...';
@@ -1041,8 +1126,8 @@ async function submit() {
     hideLookUpBanner();
     toast('Oops — could not send your fish. Try again!');
   } finally {
-    btn.disabled = false;
     btn.textContent = original;
+    updateSubmitState();
   }
 }
 

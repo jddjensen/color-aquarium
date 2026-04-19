@@ -256,6 +256,12 @@ canvas { max-width: 100%; height: auto; display: block; touch-action: none; bord
 .actions button {
   padding: .8rem 1rem; border-radius: 12px; border: none; font-size: 1.05rem; font-weight: 800; cursor: pointer;
 }
+.actions button:disabled {
+  cursor: not-allowed;
+  opacity: .6;
+  box-shadow: none;
+  transform: none;
+}
 .actions input[type="text"] {
   padding: .7rem .9rem;
   border-radius: 10px;
@@ -332,6 +338,14 @@ canvas { max-width: 100%; height: auto; display: block; touch-action: none; bord
 }
 .btn-submit { background: #2bbf5a; color: white; box-shadow: 0 5px 0 #1d8a42; }
 .btn-submit:active { transform: translateY(2px); box-shadow: 0 2px 0 #1d8a42; }
+.btn-submit:disabled { background: #8ecfa2; color: rgba(255,255,255,.92); }
+.submit-hint {
+  margin: .15rem 0 0;
+  text-align: center;
+  font-size: .92rem;
+  font-weight: 700;
+  color: #3f5f7a;
+}
 .btn-clear { background: #ffd34e; color: #5a3c00; }
 .btn-undo { background: #e0e7ff; color: #1e3a8a; }
 
@@ -390,6 +404,51 @@ body.aquarium {
   opacity: .30;
 }
 
+.tank-fx-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.tank-fx-back { z-index: 2; }
+.tank-fx-front { z-index: 16; }
+
+.light-beam-pulse {
+  position: absolute;
+  top: -10%;
+  left: var(--beam-x, 50%);
+  width: 160px;
+  height: 78vh;
+  transform: translateX(-50%) rotate(var(--beam-tilt, 0deg));
+  transform-origin: 50% 0;
+  opacity: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(255,244,184,.34) 0%,
+    rgba(165,225,255,.18) 35%,
+    rgba(120,200,255,.08) 62%,
+    rgba(120,200,255,0) 100%
+  );
+  filter: blur(1px);
+  mix-blend-mode: screen;
+}
+.light-beam-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.35), rgba(255,255,255,0));
+  opacity: .7;
+}
+.light-beam-pulse.show {
+  animation: lightBeamPulse 5.2s ease-out forwards;
+}
+@keyframes lightBeamPulse {
+  0% { opacity: 0; width: 100px; }
+  16% { opacity: .52; }
+  58% { opacity: .3; }
+  100% { opacity: 0; width: 260px; }
+}
+
 /* Cinematic dim overlay (radial cut-out around splash point) */
 .tv-dim {
   position: fixed; inset: 0;
@@ -406,6 +465,15 @@ body.aquarium {
   z-index: 15;
 }
 .tv-dim.show { opacity: 1; }
+.tv-dim.predator-arrival {
+  background: radial-gradient(
+    ellipse 330px 280px at var(--dim-x, 50%) var(--dim-y, 30%),
+    rgba(0,0,0,0) 0%,
+    rgba(0,0,0,0) 54%,
+    rgba(0,8,18,.72) 92%,
+    rgba(0,2,10,.88) 100%
+  );
+}
 
 /* Cinematic banner announcing the new fish */
 .tv-banner {
@@ -462,7 +530,7 @@ body.aquarium {
 }
 
 /* Featured fish floats above the dim layer */
-.fish-sprite.featured-mode { z-index: 17 !important; filter: drop-shadow(0 10px 20px rgba(0,0,0,.55)); }
+.fish-sprite.featured-mode { z-index: 17 !important; filter: drop-shadow(0 10px 20px rgba(0,0,0,.55)) !important; }
 
 /* Rising bubble particles */
 .bubbles {
@@ -505,6 +573,167 @@ body.aquarium {
   z-index: 7;
   opacity: 0;
   will-change: transform, opacity;
+}
+
+.arrival-fx {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+.arrival-fx.show { opacity: 1; }
+.arrival-fx.done { opacity: 0; }
+.arrival-fx span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: block;
+  animation-delay: var(--delay, 0s);
+  animation-duration: var(--dur, 1.2s);
+  animation-fill-mode: forwards;
+  animation-timing-function: ease-out;
+  will-change: transform, opacity;
+}
+
+.arrival-glow span {
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,253,222,.92) 0%, rgba(180,235,255,.42) 38%, rgba(180,235,255,0) 72%);
+  mix-blend-mode: screen;
+  animation-name: arrivalGlow;
+}
+.arrival-bubbles span,
+.arrival-pearls span {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.55);
+  animation-name: arrivalBubble;
+}
+.arrival-bubbles span {
+  background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.98), rgba(199,237,255,.48) 45%, rgba(199,237,255,0) 85%);
+}
+.arrival-pearls span {
+  background: radial-gradient(circle at 40% 35%, rgba(255,247,242,.96), rgba(255,222,232,.48) 48%, rgba(255,222,232,0) 82%);
+  box-shadow: 0 0 8px rgba(255,230,240,.55);
+}
+.arrival-ribbon span {
+  width: 74px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255,255,255,0), rgba(214,244,255,.88), rgba(255,255,255,0));
+  filter: blur(1px);
+  animation-name: arrivalRibbon;
+}
+.arrival-sand span,
+.arrival-silt span {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  animation-name: arrivalSand;
+}
+.arrival-sand span {
+  background: radial-gradient(circle, rgba(214,194,132,.95), rgba(176,140,86,.24) 64%, rgba(176,140,86,0) 100%);
+}
+.arrival-silt span {
+  background: radial-gradient(circle, rgba(208,176,120,.72), rgba(122,92,55,.22) 68%, rgba(122,92,55,0) 100%);
+}
+.arrival-wake span {
+  width: 180px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255,255,255,0), rgba(205,242,255,.92), rgba(255,255,255,0));
+  filter: blur(1px);
+  mix-blend-mode: screen;
+  animation-name: arrivalWake;
+}
+
+@keyframes arrivalGlow {
+  0% { transform: translate(-50%, -50%) scale(.18); opacity: 0; }
+  18% { opacity: .95; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(calc(1.25 * var(--scale, 1))); opacity: 0; }
+}
+@keyframes arrivalBubble {
+  0% { transform: translate(-50%, -50%) scale(.35); opacity: 0; }
+  14% { opacity: .9; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(calc(.9 * var(--scale, 1))); opacity: 0; }
+}
+@keyframes arrivalRibbon {
+  0% { transform: translate(-50%, -50%) rotate(var(--rot, 0deg)) scaleX(.24) scaleY(.7); opacity: 0; }
+  20% { opacity: .92; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(calc(var(--rot, 0deg) + 24deg)) scaleX(calc(1.05 * var(--scale, 1))) scaleY(.75); opacity: 0; }
+}
+@keyframes arrivalSand {
+  0% { transform: translate(-50%, -50%) scale(.35); opacity: 0; }
+  10% { opacity: .8; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(calc(.6 * var(--scale, 1))); opacity: 0; }
+}
+@keyframes arrivalWake {
+  0% { transform: translate(-50%, -50%) rotate(var(--rot, 0deg)) scaleX(.15); opacity: 0; }
+  18% { opacity: .86; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + 6px)) rotate(var(--rot, 0deg)) scaleX(calc(.95 * var(--scale, 1))); opacity: 0; }
+}
+
+.feeding-fx {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 14;
+  opacity: 0;
+}
+.feeding-fx.show { opacity: 1; }
+.feeding-fx::before,
+.feeding-fx::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+}
+.feeding-fx::before {
+  width: 150px;
+  height: 34px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,214,122,.72);
+  box-shadow: 0 0 20px rgba(255,214,122,.25);
+  animation: feedingRing 1.4s ease-out infinite;
+}
+.feeding-fx::after {
+  width: 94px;
+  height: 94px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,214,122,.22), rgba(255,214,122,0) 72%);
+  mix-blend-mode: screen;
+}
+.feeding-fx span {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,234,164,.96), rgba(228,176,62,.3) 62%, rgba(228,176,62,0) 100%);
+  box-shadow: 0 0 10px rgba(255,220,138,.35);
+  animation: feedingDrop var(--dur, 1.2s) linear infinite;
+  animation-delay: var(--delay, 0s);
+}
+@keyframes feedingRing {
+  0% { transform: translate(-50%, -50%) scale(.4); opacity: 0; }
+  18% { opacity: .8; }
+  100% { transform: translate(-50%, -50%) scale(1.1); opacity: 0; }
+}
+@keyframes feedingDrop {
+  0% { transform: translate(var(--dx), var(--drop)) scale(.35); opacity: 0; }
+  16% { opacity: .95; }
+  100% { transform: translate(calc(var(--dx) * .2), 0px) scale(.7); opacity: 0; }
 }
 
 /* Foreground coral + seaweed */
@@ -552,7 +781,7 @@ body.aquarium {
 .fish-sprite {
   position: absolute;
   top: 0; left: 0;
-  will-change: transform;
+  will-change: transform, filter, opacity;
   pointer-events: none;
   filter: drop-shadow(0 6px 12px rgba(0,0,0,.35));
   /* When a fish exits the cinematic (featured-mode class removed), the
@@ -720,6 +949,9 @@ body.aquarium {
 
   /* Bubbles: keep but slow way down so they feel ambient, not active */
   .bubble { animation-duration: 28s !important; opacity: .45; }
+  .light-beam-pulse,
+  .arrival-fx,
+  .feeding-fx { display: none !important; }
 
   /* Kill zoom / slide / scale transitions on the scene and overlays */
   #aquarium { transition: filter 120s linear !important; transform: none !important; }

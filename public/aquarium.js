@@ -18,6 +18,12 @@ const CINEMATIC_HOLD_MS = CINEMATIC_INTRO_MS + SPLASH_FALL_MS + SPLASH_BURST_MS 
 const FEATURE_TOTAL_MS = CINEMATIC_INTRO_MS + SPLASH_FALL_MS + SPLASH_BURST_MS + FEATURE_SWIM_MS;
 
 const NAME_SHOW_MS = 4500;
+const BACKGROUND_DRIFT_DELAY_MS = 60 * 1000;
+const BACKGROUND_DRIFT_BLEND_MS = 40 * 1000;
+const BACKGROUND_SCHOOL_LANES = [0.28, 0.5, 0.72];
+const SCHOOL_SURGE_MIN_FISH = 5;
+const FEEDING_FRENZY_MIN_FISH = 4;
+const LIGHT_PULSE_MIN_FISH = 3;
 
 // Honor the user's system-level motion preference.
 const REDUCE_MOTION_QUERY = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -116,6 +122,23 @@ const SPECIES_TRAITS = {
   shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260 },
 };
 const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0 };
+
+// If you add a new species, give it a custom arrival touch here too.
+const SPECIES_ARRIVALS = {
+  fish1:     { effect: 'glow',    path: 'playful', splashBand: [0.24, 0.34], endYF: 0.53, sway: 0.65 },
+  fish2:     { effect: 'glow',    path: 'graceful', splashBand: [0.22, 0.32], endYF: 0.5,  sway: 0.45 },
+  fish3:     { effect: 'bubbles', path: 'playful', splashBand: [0.24, 0.34], endYF: 0.55, sway: 0.75 },
+  fish4:     { effect: 'ribbon',  path: 'playful', splashBand: [0.22, 0.32], endYF: 0.52, sway: 0.58 },
+  fish5:     { effect: 'glow',    path: 'playful', splashBand: [0.24, 0.34], endYF: 0.54, sway: 0.7 },
+  puffer1:   { effect: 'bubbles', path: 'playful', splashBand: [0.28, 0.38], endYF: 0.6,  sway: 0.52, scaleMul: 1.04 },
+  seahorse1: { effect: 'pearls',  path: 'floaty',  splashBand: [0.18, 0.28], endYF: 0.46, sway: 1.05, scaleMul: 0.94 },
+  eel1:      { effect: 'ribbon',  path: 'slink',   splashBand: [0.7, 0.8],   endYF: 0.76, sway: 0.32, scaleMul: 0.96 },
+  stingray1: { effect: 'sand',    path: 'glide',   splashBand: [0.72, 0.82], endYF: 0.74, sway: 0.2,  scaleMul: 1.08 },
+  seaslug1:  { effect: 'silt',    path: 'heavy',   splashBand: [0.82, 0.9],  endYF: 0.86, sway: 0.18, scaleMul: 0.9 },
+  shark1:    { effect: 'wake',    path: 'heavy',   splashBand: [0.34, 0.46], endYF: 0.48, sway: 0.12, scaleMul: 1.14, spotlight: 'predator' },
+};
+const DEFAULT_ARRIVAL = { effect: 'glow', path: 'playful', splashBand: [0.24, 0.34], endYF: 0.54, sway: 0.55, scaleMul: 1 };
+const warnedArrivalSpecies = new Set();
 
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
@@ -291,11 +314,16 @@ class Fish {
   constructor(meta) {
     this.id = meta.id;
     this.url = meta.url;
-    this.createdAt = meta.createdAt;
+    this.createdAt = Number(meta.createdAt) || Date.now();
     this.name = (meta.name || '').trim();
     this.bio = (meta.bio || '').trim();
     this.species = (meta.species || '').toLowerCase();
     this.traits = SPECIES_TRAITS[this.species] || DEFAULT_TRAITS;
+    this.arrivalProfile = SPECIES_ARRIVALS[this.species] || DEFAULT_ARRIVAL;
+    if (this.species && !SPECIES_ARRIVALS[this.species] && !warnedArrivalSpecies.has(this.species)) {
+      warnedArrivalSpecies.add(this.species);
+      console.warn(`Add a custom SPECIES_ARRIVALS entry for "${this.species}" so it gets its own arrival moment.`);
+    }
     this.locomotion = this.traits.locomotion;
     this.isPuffer = this.species === 'puffer1';
     this.isShark = this.species === 'shark1';
@@ -311,14 +339,17 @@ class Fish {
     this.rand = mulberry32(hashStr(meta.id));
     this.pattern = PATTERNS[Math.floor(this.rand() * PATTERNS.length)];
 
-    // Depth tier: near / mid / far.
+    // Age-driven depth: fresh fish feel foregrounded, then gradually settle
+    // into a calmer back-of-tank school after about a minute.
     const r = this.rand();
-    if (r < 0.35) { this.depth = 'far';  this.depthScale = 0.75; this.depthSpeed = 0.75; }
-    else if (r < 0.75) { this.depth = 'mid'; this.depthScale = 1.0; this.depthSpeed = 1.0; }
-    else { this.depth = 'near'; this.depthScale = 1.22; this.depthSpeed = 1.08; }
+    this.depthJitter = r;
+    this.depth = 'mid';
+    this.frontDepthScale = 1.14 + r * 0.14;
+    this.backDepthScale = 0.68 + r * 0.12;
+    this.depthSpeed = 0.94 + r * 0.14;
 
     this.el = document.createElement('div');
-    this.el.className = 'fish-sprite depth-' + this.depth;
+    this.el.className = 'fish-sprite depth-mid';
     this.flipEl = document.createElement('div');
     this.flipEl.className = 'fish-flip';
     this.pitchEl = document.createElement('div');
@@ -363,9 +394,11 @@ class Fish {
     this.phaseStart = performance.now();
 
     this.splashX = 80 + this.rand() * 160;
-    this.splashY = 90 + this.rand() * 100;
+    const splashBand = this.arrivalProfile.splashBand || DEFAULT_ARRIVAL.splashBand;
+    this.splashY = window.innerHeight * (splashBand[0] + this.rand() * Math.max(0.02, splashBand[1] - splashBand[0]));
 
     this.baseSpeed = (45 + this.rand() * 45) * this.depthSpeed * (this.traits.speedMul || 1);
+    this.schoolBaseSize = (80 + this.rand() * 80) * (this.traits.sizeMul || 1);
     this.waveAmp = 14 + this.rand() * 22;
     this.wavePeriod = 1.6 + this.rand() * 2.2;
     this.wavePhase = this.rand() * Math.PI * 2;
@@ -419,6 +452,12 @@ class Fish {
     this.nameShowUntil = 0;
 
     this.splash = null;
+    this.arrivalFx = null;
+    this.arrivalFxTimer = null;
+    this.arrivalMomentPlayed = false;
+    this.glassCuriosityCooldown = 8 + this.rand() * 14;
+    this.glassCuriosityTTL = 0;
+    this.glassCuriosityTarget = null;
   }
 
   startAsSchool() {
@@ -426,19 +465,17 @@ class Fish {
     this.phaseStart = performance.now();
     this.badge.remove();
     cinematicEnd(this);
+    this.clearArrivalFx();
     if (this.splash) { this.splash.remove(); this.splash = null; }
     const W = window.innerWidth, H = window.innerHeight;
-    const baseSize = 80 + this.rand() * 80;
-    const sizeMul = this.traits.sizeMul || 1;
-    const targetSize = baseSize * this.depthScale * sizeMul;
+    const targetSize = this.schoolTargetSize(Date.now());
 
     // Smooth shrink from the featured size down to the school size so the fish
-    // doesn't visibly "pop" into the background. Filter / opacity transitions
-    // (in CSS) cover the depth-class filter fade simultaneously.
+    // doesn't visibly "pop" into the background while it begins its slow
+    // lifecycle drift toward the rear school.
     this.schoolTransitionMs = 1500;
     this.schoolTransitionStart = performance.now();
     this.schoolTransitionFromSize = this.size || targetSize;
-    this.schoolTargetSize = targetSize;
 
     // Hold the sprite above the coral overlay while its filter fades in,
     // so it doesn't visibly drop behind foreground elements mid-shrink.
@@ -488,6 +525,196 @@ class Fish {
     if (this.nameTag) this.nameShowUntil = performance.now() + NAME_SHOW_MS;
   }
 
+  ageMs(nowEpochMs) {
+    return Math.max(0, nowEpochMs - this.createdAt);
+  }
+
+  backgroundProgress(nowEpochMs) {
+    const raw = (this.ageMs(nowEpochMs) - BACKGROUND_DRIFT_DELAY_MS) / BACKGROUND_DRIFT_BLEND_MS;
+    return Math.max(0, Math.min(1, raw));
+  }
+
+  layerState(nowEpochMs) {
+    const raw = this.backgroundProgress(nowEpochMs);
+    const progress = easeInOut(raw);
+    const scale = this.frontDepthScale + (this.backDepthScale - this.frontDepthScale) * progress;
+    return {
+      progress,
+      scale,
+      zIndex: 7.6 + this.depthJitter * 0.45 + (4.1 + this.depthJitter * 0.35 - (7.6 + this.depthJitter * 0.45)) * progress,
+      opacity: 0.99 + (0.84 - 0.99) * progress,
+      saturate: 1.02 + (0.78 - 1.02) * progress,
+      brightness: 1.0 + (0.84 - 1.0) * progress,
+      blur: 0.04 + 0.62 * progress,
+      shadowBlurAdd: 4.0 * progress,
+      shadowOpacityMul: 1.0 + (0.72 - 1.0) * progress,
+      dropShadowY: 8 + (4.5 - 8) * progress,
+      dropShadowBlur: 16 + (10 - 16) * progress,
+      dropShadowAlpha: 0.45 + (0.34 - 0.45) * progress,
+    };
+  }
+
+  schoolTargetSize(nowEpochMs) {
+    return this.schoolBaseSize * this.layerState(nowEpochMs).scale;
+  }
+
+  backgroundAnchor(W, H, nowEpochMs) {
+    const seed = hashStr(this.species || this.id);
+    const lane = BACKGROUND_SCHOOL_LANES[seed % BACKGROUND_SCHOOL_LANES.length];
+    const yMin = Math.max(40, this.traits.yMinF * H);
+    const yMax = Math.min(H - this.size - 20, this.traits.yMaxF * H);
+    let habitatBias = 0.34;
+    if (this.locomotion === 'floater') habitatBias = 0.48;
+    else if (this.locomotion === 'predator') habitatBias = 0.42;
+    else if (this.locomotion === 'slitherer') habitatBias = 0.72;
+    else if (this.locomotion === 'glider') habitatBias = 0.8;
+    else if (this.locomotion === 'crawler') habitatBias = 0.88;
+    const sway = Math.sin(nowEpochMs * 0.00008 + seed * 0.001 + this.wavePhase) * (28 + this.depthJitter * 22);
+    const bob = Math.cos(nowEpochMs * 0.00006 + seed * 0.0013 + this.wavePhase) * (10 + this.depthJitter * 6);
+    return {
+      x: W * lane + sway,
+      y: yMin + (yMax - yMin) * habitatBias + bob,
+    };
+  }
+
+  applyDepthVisuals(state) {
+    const settling = this.el.classList.contains('school-settling');
+    const zIndex = settling ? Math.max(9, Math.round(state.zIndex)) : Math.round(state.zIndex);
+    if (!this._appliedDepth
+        || Math.abs(this._appliedDepth.progress - state.progress) > 0.01
+        || this._appliedDepth.settling !== settling) {
+      this.el.style.zIndex = String(zIndex);
+      this.el.style.opacity = state.opacity.toFixed(3);
+      this.el.style.filter =
+        `drop-shadow(0 ${state.dropShadowY.toFixed(1)}px ${state.dropShadowBlur.toFixed(1)}px rgba(0,0,0,${state.dropShadowAlpha.toFixed(3)})) ` +
+        `saturate(${state.saturate.toFixed(3)}) brightness(${state.brightness.toFixed(3)}) blur(${state.blur.toFixed(2)}px)`;
+      this._appliedDepth = { progress: state.progress, settling };
+    }
+  }
+
+  applyBackgroundSchooling(dt, W, H, nowEpochMs) {
+    const ageSchool = this.layer?.progress || 0;
+    if (ageSchool <= 0) return;
+    if (this.scareTTL > 0 || this.encounterState === 'chase' || this.encounterState === 'fleeing') return;
+
+    const anchor = this.backgroundAnchor(W, H, nowEpochMs);
+    const myCx = this.x + this.size * 0.5;
+    const myCy = this.y + this.size * 0.5;
+    const steer = ageSchool * ageSchool;
+    const pull = (this.locomotion === 'predator' || this.locomotion === 'crawler') ? 0.18 : 0.3;
+    this.vx += (anchor.x - myCx) * pull * steer * dt;
+    this.vy += (anchor.y - myCy) * (pull * 1.2) * steer * dt;
+  }
+
+  clearArrivalFx() {
+    if (this.arrivalFxTimer) {
+      clearTimeout(this.arrivalFxTimer);
+      this.arrivalFxTimer = null;
+    }
+    if (this.arrivalFx) {
+      this.arrivalFx.remove();
+      this.arrivalFx = null;
+    }
+  }
+
+  spawnArrivalMoment() {
+    if (REDUCE_MOTION || this.arrivalFx) return;
+    const effect = this.arrivalProfile.effect || DEFAULT_ARRIVAL.effect;
+    const el = document.createElement('div');
+    el.className = `arrival-fx arrival-${effect}`;
+    const count = effect === 'glow' ? 3 : effect === 'wake' ? 4 : 6;
+    for (let i = 0; i < count; i++) {
+      const span = document.createElement('span');
+      span.style.setProperty('--dx', `${(this.rand() - 0.5) * (effect === 'wake' ? 150 : 110)}px`);
+      span.style.setProperty('--dy', `${-18 - this.rand() * 80}px`);
+      span.style.setProperty('--delay', `${(i * 0.05).toFixed(2)}s`);
+      span.style.setProperty('--dur', `${(0.9 + this.rand() * 0.7).toFixed(2)}s`);
+      span.style.setProperty('--rot', `${(-30 + this.rand() * 60).toFixed(1)}deg`);
+      span.style.setProperty('--scale', (0.7 + this.rand() * 0.8).toFixed(2));
+      el.appendChild(span);
+    }
+    el.style.transform = `translate(${this.splashX}px, ${this.splashY}px)`;
+    const fxLayer = (effect === 'sand' || effect === 'silt') ? tankFxBackLayer : tankFxFrontLayer;
+    fxLayer.appendChild(el);
+    this.arrivalFx = el;
+    requestAnimationFrame(() => el.classList.add('show'));
+    this.arrivalFxTimer = setTimeout(() => {
+      if (!this.arrivalFx) return;
+      this.arrivalFx.classList.add('done');
+      const fx = this.arrivalFx;
+      this.arrivalFx = null;
+      this.arrivalFxTimer = null;
+      setTimeout(() => fx.remove(), 700);
+    }, effect === 'wake' ? 1900 : 1600);
+  }
+
+  stepGlassCuriosity(dt, tMs, W, H, events) {
+    if (this.mode !== 'school' || this.locomotion === 'crawler') return;
+    if (events?.feeding || events?.surge || this.isIdle) {
+      this.glassCuriosityTTL = 0;
+      this.glassCuriosityTarget = null;
+      return;
+    }
+    if (this.glassCuriosityTTL > 0) {
+      this.glassCuriosityTTL -= dt;
+      if (this.nameTag) this.nameShowUntil = Math.max(this.nameShowUntil, tMs + 600);
+      if (this.glassCuriosityTTL <= 0) {
+        this.glassCuriosityTarget = null;
+        this.glassCuriosityCooldown = 14 + this.rand() * 20;
+        return;
+      }
+      const target = this.glassCuriosityTarget;
+      if (!target) return;
+      const cx = this.x + this.size * 0.5;
+      const cy = this.y + this.size * 0.5;
+      const dx = target.x - cx;
+      const dy = target.y - cy;
+      const d = Math.hypot(dx, dy) || 1;
+      const pull = this.isShark ? 26 : this.locomotion === 'floater' ? 20 : 30;
+      const pace = d < 40 ? 0.14 : 0.28;
+      this.vx += (dx / d) * pull * pace * dt * Math.min(2.2, d / 70 + 0.5);
+      this.vy += (dy / d) * pull * pace * dt * Math.min(2.0, d / 90 + 0.4);
+      return;
+    }
+    this.glassCuriosityCooldown -= dt;
+    if (this.glassCuriosityCooldown > 0) return;
+    this.glassCuriosityCooldown = 10 + this.rand() * 18;
+    if (this.rand() < 0.55) return;
+    this.glassCuriosityTTL = 1.8 + this.rand() * 1.6;
+    this.glassCuriosityTarget = {
+      x: W * (0.38 + this.rand() * 0.24),
+      y: clamp(this.y + (this.rand() - 0.5) * 120, H * 0.2, H * 0.68),
+    };
+  }
+
+  applyTankSceneForces(dt, tMs, W, H, events) {
+    if (!events) return;
+    if (this.scareTTL > 0 || this.encounterState === 'chase' || this.encounterState === 'fleeing') return;
+    const myCx = this.x + this.size * 0.5;
+    const myCy = this.y + this.size * 0.5;
+
+    if (events.surge && this.locomotion !== 'crawler') {
+      const age = (tMs - events.surge.startedAt) / events.surge.duration;
+      const pulse = Math.sin(Math.PI * Math.max(0, Math.min(1, age)));
+      const participation = this.isShark ? 0.45 : this.locomotion === 'floater' ? 0.62 : 0.92;
+      this.vx += events.surge.dx * participation * pulse * dt;
+      this.vy += events.surge.dy * participation * pulse * dt;
+    }
+
+    if (events.feeding && this.locomotion !== 'crawler') {
+      const dx = events.feeding.x - myCx;
+      const dy = events.feeding.y - myCy;
+      const d = Math.hypot(dx, dy) || 1;
+      const pull = this.isShark ? 32 : this.locomotion === 'floater' ? 24 : 42;
+      const appetite = this.locomotion === 'glider' ? 0.72 : this.locomotion === 'slitherer' ? 0.6 : 1;
+      this.vx += (dx / d) * pull * appetite * dt;
+      this.vy += (dy / d) * pull * appetite * dt;
+      if (this.nameTag && d < 140) this.nameShowUntil = Math.max(this.nameShowUntil, tMs + 700);
+    }
+
+    this.stepGlassCuriosity(dt, tMs, W, H, events);
+  }
+
   ensureSplash() {
     if (this.splash) return;
     const el = document.createElement('div');
@@ -498,10 +725,12 @@ class Fish {
     this.splash = el;
   }
 
-  update(dtMs, tMs) {
+  update(dtMs, tMs, scene) {
     if (!this.loaded) return;
+    const nowEpochMs = scene.nowEpochMs;
     const W = window.innerWidth, H = window.innerHeight;
     const aspect = this.naturalW / this.naturalH;
+    this.layer = this.layerState(nowEpochMs);
 
     // Tick the tail-beat phase from dt so freq changes don't cause the wave
     // position to jump — previously it was derived from wall-clock * freq,
@@ -525,23 +754,27 @@ class Fish {
 
     // Smooth shrink from the featured size to the final school size so newly
     // joined fish glide into the background instead of popping.
+    const desiredSize = this.schoolTargetSize(nowEpochMs);
     if (this.schoolTransitionMs > 0) {
       const elapsed = tMs - this.schoolTransitionStart;
       if (elapsed >= this.schoolTransitionMs) {
-        this.size = this.schoolTargetSize;
+        this.size = desiredSize;
         this.schoolTransitionMs = 0;
       } else {
         const u = elapsed / this.schoolTransitionMs;
         const e = easeInOut(u);
         this.size = this.schoolTransitionFromSize +
-          (this.schoolTargetSize - this.schoolTransitionFromSize) * e;
+          (desiredSize - this.schoolTransitionFromSize) * e;
       }
+    } else {
+      const settle = Math.min(1, dt * (0.65 + this.layer.progress * 1.15));
+      this.size += (desiredSize - this.size) * settle;
     }
 
-    this.stepEncounter(dt);
+    this.stepEncounter(dt, scene.schoolFish);
 
     // Prey fish notice predators and bolt on proximity.
-    if (this.isPrey) this.applyPredatorScare();
+    if (this.isPrey) this.applyPredatorScare(scene.predators);
 
     if (this.scareTTL > 0) {
       // Flee response dominates — skip personality / encounters / flocking.
@@ -562,7 +795,9 @@ class Fish {
     }
     this.applyEncounterForce(dt);
     this.applyCursorRepulsion(dt);
-    this.applyFlocking(dt);
+    this.applyFlocking(dt, scene.schoolFish);
+    this.applyBackgroundSchooling(dt, W, H, nowEpochMs);
+    this.applyTankSceneForces(dt, tMs, W, H, scene.events);
     this.stepIdle(dt, tMs);
 
     this.x += this.vx * dt;
@@ -635,15 +870,16 @@ class Fish {
     this.idleDuration = 0;
   }
 
-  applyFlocking(dt) {
+  applyFlocking(dt, schoolFish) {
     // Solitary / sedentary animals don't school.
     if (this.locomotion === 'predator' || this.locomotion === 'crawler') return;
+    const ageSchool = this.layer?.progress || 0;
     // Species-weighted boids + extra same-species cohesion pass, so fish of
     // the same kind group into tight shoals while different species stay
     // loosely aware of each other.
-    const NEIGHBOR = 170;
-    const SAME_NEIGHBOR = 240;   // wider reach for same-species schooling
-    const SEP = 55;
+    const NEIGHBOR = 170 + ageSchool * 70;
+    const SAME_NEIGHBOR = 240 + ageSchool * 110;   // wider reach for same-species schooling
+    const SEP = 55 - ageSchool * 8;
     let ax = 0, ay = 0;  // weighted alignment sum
     let cx = 0, cy = 0;  // weighted cohesion sum
     let sx = 0, sy = 0;  // separation (unweighted — personal space is universal)
@@ -654,8 +890,8 @@ class Fish {
     let sameN = 0;
     const myCx = this.x + this.size * 0.5;
     const myCy = this.y + this.size * 0.5;
-    for (const other of fishById.values()) {
-      if (other === this || other.mode !== 'school' || !other.loaded) continue;
+    for (const other of schoolFish) {
+      if (other === this) continue;
       const ox = other.x + other.size * 0.5;
       const oy = other.y + other.size * 0.5;
       const dx = ox - myCx;
@@ -664,7 +900,7 @@ class Fish {
       if (d < 0.001) continue;
       const sameSpecies = this.species && this.species === other.species;
       if (d <= NEIGHBOR) {
-        const w = sameSpecies ? 1.0 : 0.15;
+        const w = sameSpecies ? (1.0 + ageSchool * 0.35) : (0.15 + ageSchool * 0.18);
         ax += other.vx * w; ay += other.vy * w;
         cx += ox * w; cy += oy * w;
         wAlign += w;
@@ -685,8 +921,8 @@ class Fish {
     }
     if (wAlign > 0) {
       ax /= wAlign; ay /= wAlign;
-      const alignK = 0.55;
-      const cohesionK = 0.24;
+      const alignK = 0.55 + ageSchool * 0.14;
+      const cohesionK = 0.24 + ageSchool * 0.18;
       this.vx += (ax - this.vx) * alignK * dt;
       this.vy += (ay - this.vy) * alignK * dt;
       cx = cx / wAlign - myCx;
@@ -700,14 +936,14 @@ class Fish {
       sameVx /= sameN; sameVy /= sameN;
       sameCx = sameCx / sameN - myCx;
       sameCy = sameCy / sameN - myCy;
-      this.vx += (sameVx - this.vx) * 0.35 * dt;
-      this.vy += (sameVy - this.vy) * 0.35 * dt;
-      this.vx += sameCx * 0.30 * dt;
-      this.vy += sameCy * 0.30 * dt;
+      this.vx += (sameVx - this.vx) * (0.35 + ageSchool * 0.2) * dt;
+      this.vy += (sameVy - this.vy) * (0.35 + ageSchool * 0.2) * dt;
+      this.vx += sameCx * (0.30 + ageSchool * 0.24) * dt;
+      this.vy += sameCy * (0.30 + ageSchool * 0.24) * dt;
     }
     if (nSep > 0) {
-      this.vx += sx * 90 * dt;
-      this.vy += sy * 90 * dt;
+      this.vx += sx * (90 - ageSchool * 14) * dt;
+      this.vy += sy * (90 - ageSchool * 14) * dt;
     }
     // Clamp speed so boids don't blow up. Chase/flee raises the ceiling so
     // fish can actually commit to a pursuit.
@@ -723,7 +959,7 @@ class Fish {
   // ---------- Encounter system ----------
   // Fish occasionally notice each other and enter a brief interaction:
   // chase, orbit, or curious approach. Each type has its own steering force.
-  stepEncounter(dt) {
+  stepEncounter(dt, schoolFish) {
     // Predators and bottom-crawlers don't play the social-encounter game.
     if (this.locomotion === 'predator' || this.locomotion === 'crawler') return;
     if (this.encounterState) {
@@ -738,16 +974,16 @@ class Fish {
     this.encounterCooldown -= dt;
     if (this.encounterCooldown > 0) return;
     this.encounterCooldown = 8 + this.rand() * 18;
-    this.tryInitiateEncounter();
+    this.tryInitiateEncounter(schoolFish);
   }
 
-  tryInitiateEncounter() {
+  tryInitiateEncounter(schoolFish) {
     const MAX_DIST = 380;
     const myCx = this.x + this.size * 0.5;
     const myCy = this.y + this.size * 0.5;
     const candidates = [];
-    for (const other of fishById.values()) {
-      if (other === this || other.mode !== 'school' || !other.loaded) continue;
+    for (const other of schoolFish) {
+      if (other === this) continue;
       if (other.encounterState) continue;
       // Skip sharks (intimidating) and sea slugs (oblivious) as encounter partners.
       if (other.locomotion === 'predator' || other.locomotion === 'crawler') continue;
@@ -846,12 +1082,11 @@ class Fish {
   // ---------- Predator ecosystem ----------
   // Prey fish check for nearby sharks; on contact inside the shark's
   // intimidate radius they bolt directly away for 1.5–2.5s. Puffers inflate.
-  applyPredatorScare() {
+  applyPredatorScare(predators) {
     if (this.scareTTL > 0) return;
     const myCx = this.x + this.size * 0.5;
     const myCy = this.y + this.size * 0.5;
-    for (const other of fishById.values()) {
-      if (!other.isShark || other.mode !== 'school' || !other.loaded) continue;
+    for (const other of predators) {
       const r = other.traits.intimidateRadius || 220;
       const dx = (other.x + other.size * 0.5) - myCx;
       const dy = (other.y + other.size * 0.5) - myCy;
@@ -1044,10 +1279,12 @@ class Fish {
     }
 
     const t = rawT - CINEMATIC_INTRO_MS;
+    const arrival = this.arrivalProfile;
+    const scaleMul = arrival.scaleMul || 1;
 
     if (t < SPLASH_FALL_MS) {
       const u = t / SPLASH_FALL_MS;
-      const bigH = Math.min(H * 0.48, 460);
+      const bigH = Math.min(H * 0.48, 460) * scaleMul;
       const h = bigH;
       const w = h * aspect;
       const sx = -w - 80;
@@ -1066,9 +1303,13 @@ class Fish {
     }
 
     if (t < SPLASH_FALL_MS + SPLASH_BURST_MS) {
+      if (!this.arrivalMomentPlayed) {
+        this.arrivalMomentPlayed = true;
+        this.spawnArrivalMoment();
+      }
       this.ensureSplash();
       const u = (t - SPLASH_FALL_MS) / SPLASH_BURST_MS;
-      const bigH = Math.min(H * 0.48, 460);
+      const bigH = Math.min(H * 0.48, 460) * scaleMul;
       const h = bigH;
       const w = h * aspect;
       const x = this.splashX - w / 2;
@@ -1098,41 +1339,44 @@ class Fish {
       return;
     }
     const u = elapsed / FEATURE_SWIM_MS;
-    const bigH = Math.min(H * 0.42, 400) * (1 - 0.12 * u);
+    const bigH = Math.min(H * 0.42, 400) * scaleMul * (1 - 0.12 * u);
     const h = bigH;
     const w = h * aspect;
     const startX = this.splashX - w / 2;
     const startY = this.splashY - h / 2;
     const endX = W * 0.5 - w / 2;
-    const endY = H * 0.55 - h / 2;
+    const endY = H * (arrival.endYF || DEFAULT_ARRIVAL.endYF) - h / 2;
     const baseX = startX + (endX - startX) * easeInOut(u);
     const baseY = startY + (endY - startY) * easeInOut(u);
 
     let dx = 0, dy = 0;
     const tt = elapsed / 1000;
-    switch (this.pattern) {
-      case 'wavy':
-        dy = Math.sin(tt * (2 * Math.PI / this.wavePeriod) + this.wavePhase) * this.waveAmp;
+    const sway = arrival.sway || DEFAULT_ARRIVAL.sway;
+    switch (arrival.path) {
+      case 'graceful':
+        dx = Math.cos(tt * 0.85 + this.wavePhase) * this.waveAmp * 0.45 * sway;
+        dy = Math.sin(tt * 1.1 + this.wavePhase) * this.waveAmp * 0.7 * sway;
         break;
-      case 'zigzag':
-        dy = (triangleWave(tt / (this.wavePeriod * 0.6) + this.wavePhase) * 2 - 1) * this.waveAmp;
+      case 'floaty':
+        dx = Math.cos(tt * 0.65 + this.wavePhase) * this.waveAmp * 0.18 * sway;
+        dy = Math.sin(tt * 1.7 + this.wavePhase) * this.waveAmp * 0.9 * sway;
         break;
-      case 'darter': {
-        const cycle = 1.2;
-        const p = (tt % cycle) / cycle;
-        const burst = p < 0.3 ? easeOutQuad(p / 0.3) : 1 - easeOutQuad((p - 0.3) / 0.7);
-        dx = (burst - 0.5) * this.waveAmp * 1.2;
-        dy = Math.sin(tt * 3) * 6;
+      case 'slink':
+        dx = Math.cos(tt * 1.45 + this.wavePhase) * this.waveAmp * 0.34 * sway;
+        dy = Math.sin(tt * 2.2 + this.wavePhase) * this.waveAmp * 0.44 * sway;
         break;
-      }
-      case 'circler':
-        dx = Math.cos(tt * 1.2 + this.wavePhase) * this.waveAmp * 0.9;
-        dy = Math.sin(tt * 1.2 + this.wavePhase) * this.waveAmp * 0.9;
+      case 'glide':
+        dx = Math.cos(tt * 0.55 + this.wavePhase) * this.waveAmp * 0.25 * sway;
+        dy = Math.sin(tt * 0.95 + this.wavePhase) * this.waveAmp * 0.36 * sway;
         break;
-      case 'glider':
+      case 'heavy':
+        dx = Math.cos(tt * 0.45 + this.wavePhase) * this.waveAmp * 0.14 * sway;
+        dy = Math.sin(tt * 0.7 + this.wavePhase) * this.waveAmp * 0.22 * sway;
+        break;
+      case 'playful':
       default:
-        dy = Math.sin(tt * 0.9 + this.wavePhase) * this.waveAmp * 0.6;
-        dx = Math.cos(tt * 0.6 + this.wavePhase) * this.waveAmp * 0.3;
+        dx = Math.cos(tt * 1.15 + this.wavePhase) * this.waveAmp * 0.52 * sway;
+        dy = Math.sin(tt * 1.55 + this.wavePhase) * this.waveAmp * 0.68 * sway;
         break;
     }
 
@@ -1237,6 +1481,7 @@ class Fish {
   }
 
   renderSprite(x, y, w, h, vx, vy) {
+    if (this.layer) this.applyDepthVisuals(this.layer);
     const speed = Math.hypot(vx, vy);
     // Very minimal amplitude variation with speed — we want the wiggle to
     // stay subtle regardless of how fast the animal is moving.
@@ -1295,6 +1540,7 @@ class Fish {
   }
 
   renderShadow(x, y, w, h, vx) {
+    const layer = this.layer || this.layerState(Date.now());
     const W = window.innerWidth;
     const H = window.innerHeight;
     const floorY = H - Math.max(62, Math.min(108, H * 0.12));
@@ -1304,8 +1550,8 @@ class Fish {
     const lift = Math.min(1, heightOffFloor / Math.max(1, H * 0.6));
     const driftX = (W * 0.5 - fishCx) * 0.08;
     const stretchX = 0.92 + (1 - lift) * 0.14;
-    const blur = 6 + lift * 12 + (this.depth === 'far' ? 2.5 : 0);
-    const opacity = 0.1 + (1 - lift) * 0.09 + (this.depth === 'near' ? 0.02 : 0);
+    const blur = 6 + lift * 12 + this.depthJitter * 1.6 + layer.shadowBlurAdd;
+    const opacity = (0.1 + (1 - lift) * 0.09 + this.depthJitter * 0.02) * layer.shadowOpacityMul;
     const flip = vx > 0 ? -1 : 1;
 
     this.shadowEl.style.width = w + 'px';
@@ -1342,6 +1588,7 @@ class Fish {
     if (qi >= 0) cinematicQueue.splice(qi, 1);
     this.cinematicPending = false;
     cinematicEnd(this);
+    this.clearArrivalFx();
     if (this.splash) { this.splash.remove(); this.splash = null; }
     this.badge.remove();
     // Cancel every in-progress behavioral state.
@@ -1392,6 +1639,7 @@ class Fish {
   destroy() {
     cinematicEnd(this);
     if (this._settleTimer) { clearTimeout(this._settleTimer); this._settleTimer = null; }
+    this.clearArrivalFx();
     this.shadowEl.remove();
     this.el.remove();
     this.badge.remove();
@@ -1408,6 +1656,114 @@ function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
 function triangleWave(x) {
   const f = x - Math.floor(x);
   return f < 0.5 ? f * 2 : 2 - f * 2;
+}
+function randBetween(min, max) {
+  return min + Math.random() * (max - min);
+}
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+const tankFxBackLayer = document.createElement('div');
+tankFxBackLayer.className = 'tank-fx-layer tank-fx-back';
+aq.appendChild(tankFxBackLayer);
+
+const tankFxFrontLayer = document.createElement('div');
+tankFxFrontLayer.className = 'tank-fx-layer tank-fx-front';
+aq.appendChild(tankFxFrontLayer);
+
+const lightBeamPulseEl = document.createElement('div');
+lightBeamPulseEl.className = 'light-beam-pulse';
+tankFxBackLayer.appendChild(lightBeamPulseEl);
+
+const tankEvents = {
+  surge: null,
+  feeding: null,
+  lightUntil: 0,
+  nextSurgeAt: performance.now() + randBetween(10000, 17000),
+  nextFeedingAt: performance.now() + randBetween(14000, 22000),
+  nextLightAt: performance.now() + randBetween(7000, 14000),
+};
+
+function triggerSchoolSurge(now, schoolFish) {
+  if (schoolFish.length < SCHOOL_SURGE_MIN_FISH) {
+    tankEvents.nextSurgeAt = now + randBetween(7000, 12000);
+    return;
+  }
+  const angle = randBetween(-0.65, 0.65);
+  tankEvents.surge = {
+    startedAt: now,
+    duration: 3800,
+    until: now + 3800,
+    dx: Math.cos(angle) * randBetween(95, 150),
+    dy: Math.sin(angle) * randBetween(18, 45),
+  };
+  tankEvents.nextSurgeAt = now + randBetween(15000, 24000);
+}
+
+function triggerFeedingFrenzy(now, schoolFish) {
+  if (schoolFish.length < FEEDING_FRENZY_MIN_FISH) {
+    tankEvents.nextFeedingAt = now + randBetween(9000, 15000);
+    return;
+  }
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const el = document.createElement('div');
+  el.className = 'feeding-fx';
+  const particleCount = REDUCE_MOTION ? 6 : 12;
+  for (let i = 0; i < particleCount; i++) {
+    const span = document.createElement('span');
+    span.style.setProperty('--dx', `${randBetween(-90, 90)}px`);
+    span.style.setProperty('--drop', `${randBetween(-170, -70)}px`);
+    span.style.setProperty('--delay', `${(i * 0.05).toFixed(2)}s`);
+    span.style.setProperty('--dur', `${randBetween(1.0, 1.8).toFixed(2)}s`);
+    el.appendChild(span);
+  }
+  const x = W * randBetween(0.26, 0.74);
+  const y = H * randBetween(0.16, 0.32);
+  el.style.transform = `translate(${x}px, ${y}px)`;
+  tankFxFrontLayer.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  tankEvents.feeding = {
+    startedAt: now,
+    duration: 5400,
+    until: now + 5400,
+    x,
+    y,
+    el,
+  };
+  tankEvents.nextFeedingAt = now + randBetween(18000, 26000);
+}
+
+function triggerLightBeamPulse(now, schoolFish) {
+  if (schoolFish.length < LIGHT_PULSE_MIN_FISH) {
+    tankEvents.nextLightAt = now + randBetween(6000, 11000);
+    return;
+  }
+  lightBeamPulseEl.style.setProperty('--beam-x', `${randBetween(16, 82)}%`);
+  lightBeamPulseEl.style.setProperty('--beam-tilt', `${randBetween(-8, 8).toFixed(1)}deg`);
+  lightBeamPulseEl.classList.remove('show');
+  void lightBeamPulseEl.offsetWidth;
+  lightBeamPulseEl.classList.add('show');
+  tankEvents.lightUntil = now + 5200;
+  tankEvents.nextLightAt = now + randBetween(9000, 16000);
+}
+
+function advanceTankEvents(now, schoolFish) {
+  if (tankEvents.surge && now >= tankEvents.surge.until) tankEvents.surge = null;
+  if (tankEvents.feeding && now >= tankEvents.feeding.until) {
+    tankEvents.feeding.el.remove();
+    tankEvents.feeding = null;
+  }
+  if (tankEvents.lightUntil && now >= tankEvents.lightUntil) {
+    tankEvents.lightUntil = 0;
+    lightBeamPulseEl.classList.remove('show');
+  }
+
+  if (REDUCE_MOTION) return;
+  if (!tankEvents.surge && now >= tankEvents.nextSurgeAt) triggerSchoolSurge(now, schoolFish);
+  if (!tankEvents.feeding && now >= tankEvents.nextFeedingAt) triggerFeedingFrenzy(now, schoolFish);
+  if (now >= tankEvents.nextLightAt) triggerLightBeamPulse(now, schoolFish);
 }
 
 // ---------- Cinematic spotlight controller ----------
@@ -1457,6 +1813,7 @@ function cinematicBegin(fish) {
   cinematicState.zoomFish = fish;
   cinematicDim.style.setProperty('--dim-x', fish.splashX + 'px');
   cinematicDim.style.setProperty('--dim-y', fish.splashY + 'px');
+  cinematicDim.classList.toggle('predator-arrival', fish.arrivalProfile.spotlight === 'predator');
   cinematicDim.classList.add('show');
 
   const W = window.innerWidth, H = window.innerHeight;
@@ -1479,6 +1836,7 @@ function cinematicBegin(fish) {
     // Only release if this fish still owns the zoom (no newer fish took it).
     if (cinematicState.zoomFish === fish) {
       cinematicDim.classList.remove('show');
+      cinematicDim.classList.remove('predator-arrival');
       aq.style.transform = '';
       cinematicState.zoomFish = null;
     }
@@ -1498,6 +1856,7 @@ function cinematicEnd(fish) {
   }
   if (cinematicState.zoomFish === fish) {
     cinematicDim.classList.remove('show');
+    cinematicDim.classList.remove('predator-arrival');
     aq.style.transform = '';
     cinematicState.zoomFish = null;
     if (cinematicState.zoomReleaseTimer) {
@@ -1581,8 +1940,18 @@ let lastFrame = performance.now();
 function tick(now) {
   const dt = Math.min(64, now - lastFrame);
   lastFrame = now;
+  const nowEpochMs = Date.now();
+  const schoolFish = [];
+  const predators = [];
+  for (const fish of fishById.values()) {
+    if (fish.mode !== 'school' || !fish.loaded) continue;
+    schoolFish.push(fish);
+    if (fish.isShark) predators.push(fish);
+  }
+  advanceTankEvents(now, schoolFish);
   if (caustics) caustics.render(now);
-  for (const fish of fishById.values()) fish.update(dt, now);
+  const scene = { nowEpochMs, schoolFish, predators, events: tankEvents };
+  for (const fish of fishById.values()) fish.update(dt, now, scene);
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
