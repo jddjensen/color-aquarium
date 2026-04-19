@@ -30,12 +30,19 @@
         <div class="tool-row">
           <button class="tool-btn active" data-tool="brush">Brush</button>
           <button class="tool-btn" data-tool="fill">Fill</button>
+          <button class="tool-btn" data-tool="sparkle">Sparkle</button>
+          <button class="tool-btn" data-tool="sticker">Sticker</button>
           <button class="tool-btn" data-tool="eraser">Eraser</button>
         </div>
         <div class="size-row" style="margin-top:.6rem;">
           <label>Brush size: <span id="sizeLabel">18</span></label>
           <input type="range" id="size" min="4" max="60" value="18" />
         </div>
+      </div>
+
+      <div class="panel sticker-panel" id="stickerPanel" hidden>
+        <h3>Stickers</h3>
+        <div class="stickers" id="stickers"></div>
       </div>
 
       <div class="panel actions">

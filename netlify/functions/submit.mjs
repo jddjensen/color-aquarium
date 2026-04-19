@@ -34,7 +34,7 @@ export default async (req) => {
   const id = randomBytes(8).toString("hex");
   const createdAt = Date.now();
 
-  const store = getStore("fish");
+  const store = getStore({ name: "fish", consistency: "strong" });
   await store.set(`${day}/${id}.png`, buf);
   await store.setJSON(`${day}/${id}.json`, { name, species, createdAt });
 

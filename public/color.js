@@ -48,6 +48,84 @@ let lastPt = null;
 const undoStack = [];
 const UNDO_LIMIT = 25;
 
+// Sparkle / rainbow brush state
+let sparkleHue = 0;
+
+// Sticker state
+const STICKERS = [
+  {
+    id: 'eye',
+    label: 'Googly eye',
+    // Circle with dark pupil + highlight
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="46" fill="white" stroke="#222" stroke-width="5"/>
+      <circle cx="58" cy="58" r="20" fill="#111"/>
+      <circle cx="52" cy="52" r="5" fill="white"/>
+    </svg>`,
+  },
+  {
+    id: 'heart',
+    label: 'Heart',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path d="M50 85 C50 85, 8 58, 8 34 C8 18, 24 10, 36 22 C42 28, 48 34, 50 40 C52 34, 58 28, 64 22 C76 10, 92 18, 92 34 C92 58, 50 85, 50 85 Z"
+        fill="#ff3b6e" stroke="#80002a" stroke-width="4"/>
+    </svg>`,
+  },
+  {
+    id: 'star',
+    label: 'Star',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path d="M50 6 L62 40 L96 45 L70 68 L78 98 L50 82 L22 98 L30 68 L4 45 L38 40 Z"
+        fill="#ffd34e" stroke="#8f5a00" stroke-width="4"/>
+    </svg>`,
+  },
+  {
+    id: 'sparkle',
+    label: 'Sparkle',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path d="M50 5 L55 45 L95 50 L55 55 L50 95 L45 55 L5 50 L45 45 Z"
+        fill="#6ee2ff" stroke="#005a7a" stroke-width="3"/>
+    </svg>`,
+  },
+  {
+    id: 'rainbow',
+    label: 'Rainbow star',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <linearGradient id="rg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#ff3b30"/>
+          <stop offset="0.33" stop-color="#ffcc00"/>
+          <stop offset="0.66" stop-color="#34c759"/>
+          <stop offset="1" stop-color="#5856d6"/>
+        </linearGradient>
+      </defs>
+      <path d="M50 6 L62 40 L96 45 L70 68 L78 98 L50 82 L22 98 L30 68 L4 45 L38 40 Z"
+        fill="url(#rg)" stroke="#222" stroke-width="3"/>
+    </svg>`,
+  },
+  {
+    id: 'flower',
+    label: 'Flower',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g stroke="#703a00" stroke-width="3">
+        <circle cx="50" cy="22" r="16" fill="#ff85a2"/>
+        <circle cx="22" cy="42" r="16" fill="#ff85a2"/>
+        <circle cx="78" cy="42" r="16" fill="#ff85a2"/>
+        <circle cx="34" cy="72" r="16" fill="#ff85a2"/>
+        <circle cx="66" cy="72" r="16" fill="#ff85a2"/>
+        <circle cx="50" cy="50" r="14" fill="#ffd34e"/>
+      </g>
+    </svg>`,
+  },
+];
+
+const stickerPanel = document.getElementById('stickerPanel');
+const stickersEl = document.getElementById('stickers');
+const stickerImages = new Map();
+let currentSticker = null;
+let stickerPreview = null;
+const STICKER_CANVAS_SIZE = 120; // size in canvas px when placed
+
 // ---------- Setup UI ----------
 FISH.forEach((f, i) => {
   const btn = document.createElement('button');
@@ -79,9 +157,38 @@ document.querySelectorAll('.tool-btn').forEach(b => {
     document.querySelectorAll('.tool-btn').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     currentTool = b.dataset.tool;
-    canvas.style.cursor = currentTool === 'fill' ? 'cell' : 'crosshair';
+    if (currentTool === 'fill') canvas.style.cursor = 'cell';
+    else if (currentTool === 'sticker') canvas.style.cursor = 'copy';
+    else canvas.style.cursor = 'crosshair';
+    // Show the sticker picker only when the sticker tool is selected.
+    if (stickerPanel) stickerPanel.hidden = (currentTool !== 'sticker');
+    // If switching away from sticker, tear down any in-flight preview.
+    if (currentTool !== 'sticker' && stickerPreview) {
+      stickerPreview.el.remove();
+      stickerPreview = null;
+    }
   });
 });
+
+// Build sticker picker: preload each as an Image so placement draws immediately.
+STICKERS.forEach((s, i) => {
+  const url = 'data:image/svg+xml;utf8,' + encodeURIComponent(s.svg);
+  const img = new Image();
+  img.src = url;
+  stickerImages.set(s.id, img);
+  const sw = document.createElement('button');
+  sw.type = 'button';
+  sw.className = 'sticker-swatch' + (i === 0 ? ' active' : '');
+  sw.title = s.label;
+  sw.innerHTML = `<img src="${url}" alt="${s.label}" />`;
+  sw.addEventListener('click', () => {
+    document.querySelectorAll('.sticker-swatch').forEach(x => x.classList.remove('active'));
+    sw.classList.add('active');
+    currentSticker = s.id;
+  });
+  stickersEl.appendChild(sw);
+});
+currentSticker = STICKERS[0].id;
 
 sizeEl.addEventListener('input', () => {
   brushSize = +sizeEl.value;
@@ -206,6 +313,13 @@ canvas.addEventListener('pointerdown', (ev) => {
   ev.preventDefault();
   canvas.setPointerCapture(ev.pointerId);
   const p = canvasPoint(ev);
+
+  if (currentTool === 'sticker') {
+    pushUndo();
+    beginStickerPreview(ev);
+    return;
+  }
+
   pushUndo();
   if (currentTool === 'fill') {
     if (!isPaintable(p.x, p.y)) return;
@@ -216,12 +330,17 @@ canvas.addEventListener('pointerdown', (ev) => {
   }
   drawing = true;
   lastPt = p;
+  sparkleHue = (sparkleHue + 17) % 360; // start each stroke at a fresh hue
   strokeAt(p, p);
   applyMask();
   render();
 });
 
 canvas.addEventListener('pointermove', (ev) => {
+  if (stickerPreview) {
+    updateStickerPreview(ev);
+    return;
+  }
   if (!drawing) return;
   const p = canvasPoint(ev);
   strokeAt(lastPt, p);
@@ -231,6 +350,11 @@ canvas.addEventListener('pointermove', (ev) => {
 });
 
 function endStroke(ev) {
+  if (stickerPreview) {
+    commitStickerPreview(ev);
+    try { canvas.releasePointerCapture(ev.pointerId); } catch {}
+    return;
+  }
   if (!drawing) return;
   drawing = false;
   lastPt = null;
@@ -247,6 +371,11 @@ function strokeAt(a, b) {
   if (currentTool === 'eraser') {
     paintCtx.globalCompositeOperation = 'destination-out';
     paintCtx.strokeStyle = 'rgba(0,0,0,1)';
+  } else if (currentTool === 'sparkle') {
+    paintCtx.globalCompositeOperation = 'source-over';
+    // Rotate the hue along the stroke so each segment is a new color.
+    sparkleHue = (sparkleHue + 12) % 360;
+    paintCtx.strokeStyle = `hsl(${sparkleHue}, 90%, 55%)`;
   } else {
     paintCtx.globalCompositeOperation = 'source-over';
     paintCtx.strokeStyle = currentColor;
@@ -255,7 +384,76 @@ function strokeAt(a, b) {
   paintCtx.moveTo(a.x, a.y);
   paintCtx.lineTo(b.x, b.y);
   paintCtx.stroke();
+
+  // Sparkle mode: scatter a few small glitter dots around the stroke end.
+  if (currentTool === 'sparkle') emitSparkles(b);
+
   paintCtx.globalCompositeOperation = 'source-over';
+}
+
+function emitSparkles(p) {
+  // A handful of tiny bright dots near the stroke end, colors offset from
+  // the current rotating hue so they "glitter" against the stroke.
+  const count = 2 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = brushSize * (0.55 + Math.random() * 1.1);
+    const x = p.x + Math.cos(angle) * radius;
+    const y = p.y + Math.sin(angle) * radius;
+    const size = 1.5 + Math.random() * (brushSize * 0.18);
+    const hue = (sparkleHue + (Math.random() * 120 - 60) + 360) % 360;
+    const light = 70 + Math.random() * 20;
+    paintCtx.fillStyle = `hsl(${hue}, 95%, ${light}%)`;
+    paintCtx.beginPath();
+    paintCtx.arc(x, y, size, 0, Math.PI * 2);
+    paintCtx.fill();
+    // A bright white core on some dots for extra pop.
+    if (Math.random() < 0.4) {
+      paintCtx.fillStyle = 'rgba(255,255,255,.85)';
+      paintCtx.beginPath();
+      paintCtx.arc(x, y, Math.max(0.6, size * 0.45), 0, Math.PI * 2);
+      paintCtx.fill();
+    }
+  }
+}
+
+// ---------- Sticker placement ----------
+function beginStickerPreview(ev) {
+  if (!currentSticker) return;
+  const img = stickerImages.get(currentSticker);
+  if (!img) return;
+  const rect = canvas.getBoundingClientRect();
+  // Display size: sticker canvas size scaled to displayed canvas.
+  const displaySize = STICKER_CANVAS_SIZE * (rect.width / canvas.width);
+  const el = document.createElement('div');
+  el.className = 'sticker-preview';
+  el.style.width = displaySize + 'px';
+  el.style.height = displaySize + 'px';
+  const im = document.createElement('img');
+  im.src = img.src;
+  el.appendChild(im);
+  document.body.appendChild(el);
+  stickerPreview = { el, displaySize };
+  updateStickerPreview(ev);
+}
+
+function updateStickerPreview(ev) {
+  if (!stickerPreview) return;
+  const { el, displaySize } = stickerPreview;
+  el.style.transform = `translate(${ev.clientX - displaySize / 2}px, ${ev.clientY - displaySize / 2}px)`;
+}
+
+function commitStickerPreview(ev) {
+  if (!stickerPreview) return;
+  const p = canvasPoint(ev);
+  const img = stickerImages.get(currentSticker);
+  stickerPreview.el.remove();
+  stickerPreview = null;
+  if (!img || !img.complete) return;
+  const size = STICKER_CANVAS_SIZE;
+  paintCtx.drawImage(img, p.x - size / 2, p.y - size / 2, size, size);
+  applyMask();
+  render();
 }
 
 // ---------- Flood fill (bounded by line art) ----------

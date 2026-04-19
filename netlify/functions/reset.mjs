@@ -9,7 +9,7 @@ export default async (req) => {
     });
   }
   const day = todayKey();
-  const store = getStore("fish");
+  const store = getStore({ name: "fish", consistency: "strong" });
   const { blobs } = await store.list({ prefix: `${day}/` });
   const BATCH = 20;
   for (let i = 0; i < blobs.length; i += BATCH) {

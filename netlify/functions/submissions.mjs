@@ -14,7 +14,7 @@ export default async (req) => {
     return new Response("Bad request", { status: 400 });
   }
 
-  const store = getStore("fish");
+  const store = getStore({ name: "fish", consistency: "strong" });
   const key = `${day}/${id}.png`;
   const blob = await store.get(key, { type: "arrayBuffer" });
   if (!blob) return new Response("Not found", { status: 404 });

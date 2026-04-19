@@ -185,8 +185,8 @@ function initCaustics(canvas) {
       c += caustic(p * 1.6 + vec2(1.7, -1.2)) * 0.35;
       c *= band;
 
-      vec3 col = mix(vec3(0.08, 0.24, 0.34), vec3(0.76, 0.95, 1.0), c);
-      float alpha = clamp(c * 0.34, 0.0, 0.34);
+      vec3 col = mix(vec3(0.06, 0.18, 0.26), vec3(0.58, 0.78, 0.92), c);
+      float alpha = clamp(c * 0.14, 0.0, 0.14);
       gl_FragColor = vec4(col, alpha);
     }
   `;

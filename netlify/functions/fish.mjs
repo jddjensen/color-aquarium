@@ -6,7 +6,8 @@ import { getStore } from "@netlify/blobs";
 // stale data is gone.
 export default async () => {
   const day = todayKey();
-  const store = getStore("fish");
+  // Strong consistency — otherwise list() can lag new submissions by 10–60 s.
+  const store = getStore({ name: "fish", consistency: "strong" });
 
   if (Math.random() < 0.1) {
     purgeOldDays(store, day).catch((e) => console.warn("purge failed", e));
