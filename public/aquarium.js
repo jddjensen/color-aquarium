@@ -103,19 +103,19 @@ const PATTERNS = ['wavy', 'darter', 'circler', 'glider', 'zigzag'];
 // slitherer (eel — heavy body wave), glider (sting ray — subtle flap),
 // crawler (sea slug — barely moves), predator (shark — large, solo).
 const SPECIES_TRAITS = {
-  fish1:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.70, speedMul: 1.00 },
-  fish2:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
-  fish3:     { locomotion: 'swimmer',   yMinF: 0.15, yMaxF: 0.65, speedMul: 1.00 },
-  fish4:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.68, speedMul: 1.00 },
-  fish5:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
-  puffer1:   { locomotion: 'swimmer',   yMinF: 0.28, yMaxF: 0.75, speedMul: 0.75 },
-  seahorse1: { locomotion: 'floater',   yMinF: 0.25, yMaxF: 0.70, speedMul: 0.45 },
-  eel1:      { locomotion: 'slitherer', yMinF: 0.70, yMaxF: 0.90, speedMul: 0.70, ampMul: 2.6, freqMul: 0.85 },
-  stingray1: { locomotion: 'glider',    yMinF: 0.72, yMaxF: 0.90, speedMul: 0.70, ampMul: 0.30, flap: true },
-  seaslug1:  { locomotion: 'crawler',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.20, ampMul: 0.25, freqMul: 0.45, glide: true },
-  shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260 },
+  fish1:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.70, speedMul: 1.00, eye: { x: 0.18, y: 0.40, size: 0.11 } },
+  fish2:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00, eye: { x: 0.20, y: 0.38, size: 0.11 } },
+  fish3:     { locomotion: 'swimmer',   yMinF: 0.15, yMaxF: 0.65, speedMul: 1.00, eye: { x: 0.22, y: 0.40, size: 0.11 } },
+  fish4:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.68, speedMul: 1.00, eye: { x: 0.18, y: 0.38, size: 0.11 } },
+  fish5:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00, eye: { x: 0.20, y: 0.38, size: 0.11 } },
+  puffer1:   { locomotion: 'swimmer',   yMinF: 0.28, yMaxF: 0.75, speedMul: 0.75, eye: { x: 0.24, y: 0.42, size: 0.10 } },
+  seahorse1: { locomotion: 'floater',   yMinF: 0.25, yMaxF: 0.70, speedMul: 0.45, eye: { x: 0.45, y: 0.15, size: 0.12 } },
+  eel1:      { locomotion: 'slitherer', yMinF: 0.70, yMaxF: 0.90, speedMul: 0.70, ampMul: 2.6, freqMul: 0.85, eye: { x: 0.08, y: 0.45, size: 0.08 } },
+  stingray1: { locomotion: 'glider',    yMinF: 0.72, yMaxF: 0.90, speedMul: 0.70, ampMul: 0.30, flap: true, eye: { x: 0.35, y: 0.30, size: 0.07 } },
+  seaslug1:  { locomotion: 'crawler',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.20, ampMul: 0.25, freqMul: 0.45, glide: true, eye: { x: 0.82, y: 0.32, size: 0.08 } },
+  shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260, eye: { x: 0.20, y: 0.40, size: 0.06 } },
 };
-const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0 };
+const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0, eye: { x: 0.17, y: 0.40, size: 0.10 } };
 
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
@@ -329,6 +329,19 @@ class Fish {
     this.img.alt = 'fish';
     this.img.draggable = false;
     this.wiggleEl.appendChild(this.img);
+    // Animated eye overlay — a small white eye with a pupil that tracks the
+    // swim direction. Positioned per-species at the "head" of the sprite.
+    this.eyeEl = document.createElement('div');
+    this.eyeEl.className = 'fish-eye';
+    this.pupilEl = document.createElement('div');
+    this.pupilEl.className = 'fish-pupil';
+    this.eyeEl.appendChild(this.pupilEl);
+    const eye = this.traits.eye || { x: 0.17, y: 0.40, size: 0.10 };
+    this.eyeEl.style.left = (eye.x * 100) + '%';
+    this.eyeEl.style.top = (eye.y * 100) + '%';
+    this.eyeEl.style.width = (eye.size * 100) + '%';
+    this.eyeEl.style.height = (eye.size * 100) + '%';
+    this.wiggleEl.appendChild(this.eyeEl);
     this.pitchEl.appendChild(this.wiggleEl);
     this.flipEl.appendChild(this.pitchEl);
     this.el.appendChild(this.flipEl);
@@ -449,12 +462,31 @@ class Fish {
     }, this.schoolTransitionMs);
 
     if (this.x < -1000) {
-      this.x = Math.random() * W;
       // Habitat-aware initial placement: bottom-dwellers start near the floor,
       // floaters in mid-column, swimmers anywhere in their preferred band.
-      const yMin = this.traits.yMinF * H;
-      const yMax = this.traits.yMaxF * H;
-      this.y = yMin + Math.random() * Math.max(1, (yMax - yMin));
+      // If any same-species fish is already schooling, bias placement toward
+      // one of them so new arrivals join their own kind.
+      const sameKin = [];
+      for (const other of fishById.values()) {
+        if (other === this) continue;
+        if (other.mode !== 'school' || !other.loaded) continue;
+        if (this.species && other.species === this.species) sameKin.push(other);
+      }
+      if (sameKin.length) {
+        const pick = sameKin[Math.floor(Math.random() * sameKin.length)];
+        this.x = pick.x + (Math.random() - 0.5) * 140;
+        this.y = pick.y + (Math.random() - 0.5) * 80;
+        // Clamp to viewport / habitat.
+        this.x = Math.max(0, Math.min(W - 50, this.x));
+        const yMin = this.traits.yMinF * H;
+        const yMax = this.traits.yMaxF * H;
+        this.y = Math.max(yMin, Math.min(yMax, this.y));
+      } else {
+        this.x = Math.random() * W;
+        const yMin = this.traits.yMinF * H;
+        const yMax = this.traits.yMaxF * H;
+        this.y = yMin + Math.random() * Math.max(1, (yMax - yMin));
+      }
     }
 
     const dir = this.vx === 0 ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(this.vx);
@@ -618,16 +650,20 @@ class Fish {
   applyFlocking(dt) {
     // Solitary / sedentary animals don't school.
     if (this.locomotion === 'predator' || this.locomotion === 'crawler') return;
-    // Species-weighted boids: same-species neighbors dominate the alignment /
-    // cohesion averages so fish of the same kind naturally school tighter,
-    // while different species still politely steer around each other.
-    const NEIGHBOR = 150;
+    // Species-weighted boids + extra same-species cohesion pass, so fish of
+    // the same kind group into tight shoals while different species stay
+    // loosely aware of each other.
+    const NEIGHBOR = 170;
+    const SAME_NEIGHBOR = 240;   // wider reach for same-species schooling
     const SEP = 55;
     let ax = 0, ay = 0;  // weighted alignment sum
     let cx = 0, cy = 0;  // weighted cohesion sum
     let sx = 0, sy = 0;  // separation (unweighted — personal space is universal)
     let wAlign = 0;
     let nSep = 0;
+    // Same-species separate pass — extra alignment + cohesion pull.
+    let sameVx = 0, sameVy = 0, sameCx = 0, sameCy = 0;
+    let sameN = 0;
     const myCx = this.x + this.size * 0.5;
     const myCy = this.y + this.size * 0.5;
     for (const other of fishById.values()) {
@@ -637,23 +673,30 @@ class Fish {
       const dx = ox - myCx;
       const dy = oy - myCy;
       const d = Math.hypot(dx, dy);
-      if (d > NEIGHBOR || d < 0.001) continue;
+      if (d < 0.001) continue;
       const sameSpecies = this.species && this.species === other.species;
-      // Same-species: full weight. Different species: light social awareness.
-      const w = sameSpecies ? 1.0 : 0.2;
-      ax += other.vx * w; ay += other.vy * w;
-      cx += ox * w; cy += oy * w;
-      wAlign += w;
-      if (d < SEP) {
-        const push = (SEP - d) / SEP;
-        sx -= (dx / d) * push;
-        sy -= (dy / d) * push;
-        nSep++;
+      if (d <= NEIGHBOR) {
+        const w = sameSpecies ? 1.0 : 0.15;
+        ax += other.vx * w; ay += other.vy * w;
+        cx += ox * w; cy += oy * w;
+        wAlign += w;
+        if (d < SEP) {
+          const push = (SEP - d) / SEP;
+          sx -= (dx / d) * push;
+          sy -= (dy / d) * push;
+          nSep++;
+        }
+      }
+      if (sameSpecies && d <= SAME_NEIGHBOR) {
+        sameVx += other.vx;
+        sameVy += other.vy;
+        sameCx += ox;
+        sameCy += oy;
+        sameN++;
       }
     }
     if (wAlign > 0) {
       ax /= wAlign; ay /= wAlign;
-      // Tighter alignment + cohesion when same-species neighbors dominate the sum.
       const alignK = 0.55;
       const cohesionK = 0.24;
       this.vx += (ax - this.vx) * alignK * dt;
@@ -662,6 +705,17 @@ class Fish {
       cy = cy / wAlign - myCy;
       this.vx += cx * cohesionK * dt;
       this.vy += cy * cohesionK * dt;
+    }
+    // Extra same-species pass: pulls the fish toward the school center and
+    // aligns it more strongly with same-kind neighbors.
+    if (sameN > 0) {
+      sameVx /= sameN; sameVy /= sameN;
+      sameCx = sameCx / sameN - myCx;
+      sameCy = sameCy / sameN - myCy;
+      this.vx += (sameVx - this.vx) * 0.35 * dt;
+      this.vy += (sameVy - this.vy) * 0.35 * dt;
+      this.vx += sameCx * 0.30 * dt;
+      this.vy += sameCy * 0.30 * dt;
     }
     if (nSep > 0) {
       this.vx += sx * 90 * dt;
@@ -1249,6 +1303,19 @@ class Fish {
       wiggleParts.push(`scaleX(${glide})`);
     }
     this.wiggleEl.style.transform = wiggleParts.join(' ');
+
+    // Pupil look-direction: on-screen we want the pupil to shift toward the
+    // swim direction. The eye lives inside a scaleX(flip) container, so we
+    // multiply x by flip to cancel the mirror (flip is ±1).
+    if (this.pupilEl) {
+      const m = Math.hypot(vx, vy);
+      let lx = 0, ly = 0;
+      if (m > 0.5) {
+        lx = (vx / m) * flip * 28;   // % of pupil eye frame
+        ly = (vy / m) * 28;
+      }
+      this.pupilEl.style.transform = `translate(${lx}%, ${ly}%)`;
+    }
     this.renderShadow(x, y, w, h, vx);
   }
 
@@ -1355,6 +1422,7 @@ class Fish {
     this.badge.remove();
     if (this.splash) this.splash.remove();
     if (this.nameTag) this.nameTag.remove();
+    // eyeEl and pupilEl are descendants of this.el so they're removed above.
   }
 }
 

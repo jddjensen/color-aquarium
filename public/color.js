@@ -16,9 +16,26 @@ const FISH = [
 ];
 
 const PALETTE = [
-  '#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#00c7be',
-  '#007aff', '#5856d6', '#af52de', '#ff2d55', '#a2845e',
-  '#000000', '#ffffff', '#ff85a2', '#7ee7ff', '#c7f27a',
+  // Reds
+  '#ff3b30', '#ff6b6b', '#cc0000', '#e91e63',
+  // Oranges
+  '#ff9500', '#ff7a59', '#ff6d00', '#d2691e',
+  // Yellows
+  '#ffcc00', '#ffe14d', '#ffd34e', '#ffaa00',
+  // Greens
+  '#34c759', '#8fd14f', '#a4e884', '#00695c',
+  // Cyans / teals
+  '#00c7be', '#7ee7ff', '#40e0d0', '#00bfff',
+  // Blues
+  '#007aff', '#3b82f6', '#1e3a8a', '#003f7f',
+  // Purples
+  '#5856d6', '#8b5cf6', '#af52de', '#6a0dad',
+  // Pinks
+  '#ff2d55', '#ff85a2', '#ffb6c1', '#ff69b4',
+  // Earth / browns
+  '#a2845e', '#8b4513', '#d2b48c', '#3e2723',
+  // Neutrals
+  '#000000', '#666666', '#c0c0c0', '#ffffff',
 ];
 
 // Pixels this dark (sum of rgb) on the line art are treated as "line" (fill barrier).
@@ -127,6 +144,97 @@ const STICKERS = [
         <circle cx="34" cy="72" r="16" fill="#ff85a2"/>
         <circle cx="66" cy="72" r="16" fill="#ff85a2"/>
         <circle cx="50" cy="50" r="14" fill="#ffd34e"/>
+      </g>
+    </svg>`,
+  },
+  {
+    id: 'crown',
+    label: 'Crown',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path d="M10 70 L15 30 L35 55 L50 20 L65 55 L85 30 L90 70 Z"
+        fill="#ffd34e" stroke="#8f5a00" stroke-width="3"/>
+      <rect x="10" y="70" width="80" height="12" fill="#ffb347" stroke="#8f5a00" stroke-width="3"/>
+      <circle cx="25" cy="76" r="3" fill="#ff3b6e"/>
+      <circle cx="50" cy="76" r="3" fill="#6ee2ff"/>
+      <circle cx="75" cy="76" r="3" fill="#34c759"/>
+    </svg>`,
+  },
+  {
+    id: 'bolt',
+    label: 'Lightning bolt',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path d="M55 5 L20 55 L42 55 L35 95 L80 40 L56 40 Z"
+        fill="#ffe14d" stroke="#8f5a00" stroke-width="3"/>
+    </svg>`,
+  },
+  {
+    id: 'bubble',
+    label: 'Bubble',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="42" fill="rgba(180,230,255,.55)" stroke="#0a7fa3" stroke-width="3"/>
+      <circle cx="38" cy="36" r="10" fill="white" opacity=".8"/>
+      <circle cx="60" cy="28" r="5" fill="white" opacity=".8"/>
+    </svg>`,
+  },
+  {
+    id: 'smile',
+    label: 'Smiley',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="44" fill="#ffd34e" stroke="#8f5a00" stroke-width="4"/>
+      <circle cx="36" cy="40" r="5" fill="#222"/>
+      <circle cx="64" cy="40" r="5" fill="#222"/>
+      <path d="M30 58 Q50 80 70 58" fill="none" stroke="#222" stroke-width="4" stroke-linecap="round"/>
+    </svg>`,
+  },
+  {
+    id: 'glitterburst',
+    label: 'Glitter burst',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g>
+        <path d="M50 5 L53 45 L93 50 L53 55 L50 95 L47 55 L7 50 L47 45 Z" fill="#ffe14d" stroke="#c48c00" stroke-width="2"/>
+        <circle cx="22" cy="22" r="5" fill="#ff85a2"/>
+        <circle cx="78" cy="22" r="5" fill="#6ee2ff"/>
+        <circle cx="22" cy="78" r="5" fill="#8b5cf6"/>
+        <circle cx="78" cy="78" r="5" fill="#34c759"/>
+        <circle cx="14" cy="50" r="3.5" fill="#ff3b6e"/>
+        <circle cx="86" cy="50" r="3.5" fill="#ffd34e"/>
+        <circle cx="50" cy="14" r="3.5" fill="#7ee7ff"/>
+        <circle cx="50" cy="86" r="3.5" fill="#ff9500"/>
+      </g>
+    </svg>`,
+  },
+  {
+    id: 'confetti',
+    label: 'Confetti',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g stroke="#333" stroke-width="1.5">
+        <rect x="18" y="22" width="10" height="14" fill="#ff3b6e" transform="rotate(20 23 29)"/>
+        <rect x="70" y="18" width="10" height="14" fill="#ffd34e" transform="rotate(-25 75 25)"/>
+        <rect x="46" y="10" width="10" height="14" fill="#34c759" transform="rotate(15 51 17)"/>
+        <rect x="10" y="58" width="10" height="14" fill="#6ee2ff" transform="rotate(-15 15 65)"/>
+        <rect x="74" y="62" width="10" height="14" fill="#8b5cf6" transform="rotate(20 79 69)"/>
+        <rect x="40" y="66" width="10" height="14" fill="#ff9500" transform="rotate(-10 45 73)"/>
+        <rect x="30" y="40" width="10" height="14" fill="#ff85a2" transform="rotate(35 35 47)"/>
+      </g>
+    </svg>`,
+  },
+  {
+    id: 'moon',
+    label: 'Moon',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path d="M65 20 A35 35 0 1 0 65 80 A28 28 0 1 1 65 20 Z"
+        fill="#fff4b8" stroke="#6b5100" stroke-width="3"/>
+    </svg>`,
+  },
+  {
+    id: 'anchor',
+    label: 'Anchor',
+    svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g fill="none" stroke="#333" stroke-width="5" stroke-linecap="round">
+        <circle cx="50" cy="18" r="8"/>
+        <line x1="50" y1="26" x2="50" y2="82"/>
+        <line x1="36" y1="42" x2="64" y2="42"/>
+        <path d="M20 70 Q30 88 50 82 Q70 88 80 70"/>
       </g>
     </svg>`,
   },
@@ -399,6 +507,14 @@ canvas.addEventListener('pointerdown', (ev) => {
     render();
     return;
   }
+  if (currentTool === 'glitter') {
+    drawing = true;
+    lastPt = p;
+    emitGlitter(p);
+    applyMask();
+    render();
+    return;
+  }
   drawing = true;
   lastPt = p;
   sparkleHue = (sparkleHue + 17) % 360; // start each stroke at a fresh hue
@@ -414,7 +530,11 @@ canvas.addEventListener('pointermove', (ev) => {
   }
   if (!drawing) return;
   const p = canvasPoint(ev);
-  strokeAt(lastPt, p);
+  if (currentTool === 'glitter') {
+    emitGlitter(p);
+  } else {
+    strokeAt(lastPt, p);
+  }
   applyMask();
   lastPt = p;
   render();
@@ -460,6 +580,53 @@ function strokeAt(a, b) {
   if (currentTool === 'sparkle') emitSparkles(b);
 
   paintCtx.globalCompositeOperation = 'source-over';
+}
+
+function emitGlitter(p) {
+  // Pure glitter: dense cluster of multi-colored bright dots + star shapes,
+  // no base stroke line. Goes wilder than the sparkle brush.
+  const radius = brushSize * 1.5;
+  const count = 8 + Math.floor(Math.random() * 8);
+  for (let i = 0; i < count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const r = Math.random() * radius;
+    const x = p.x + Math.cos(angle) * r;
+    const y = p.y + Math.sin(angle) * r;
+    const size = 2 + Math.random() * (brushSize * 0.5);
+    const hue = Math.random() * 360;
+    paintCtx.fillStyle = `hsl(${hue}, 95%, 60%)`;
+    paintCtx.beginPath();
+    paintCtx.arc(x, y, size, 0, Math.PI * 2);
+    paintCtx.fill();
+    // Bright white core
+    if (Math.random() < 0.65) {
+      paintCtx.fillStyle = 'rgba(255,255,255,.92)';
+      paintCtx.beginPath();
+      paintCtx.arc(x, y, size * 0.45, 0, Math.PI * 2);
+      paintCtx.fill();
+    }
+    // Some become 4-point sparkle stars
+    if (Math.random() < 0.28) {
+      drawGlintStar(x, y, size * 1.6);
+    }
+  }
+}
+
+function drawGlintStar(x, y, r) {
+  paintCtx.save();
+  paintCtx.fillStyle = 'rgba(255,255,255,.95)';
+  paintCtx.beginPath();
+  const points = 4;
+  for (let i = 0; i < points * 2; i++) {
+    const a = (i / (points * 2)) * Math.PI * 2 - Math.PI / 2;
+    const rr = (i % 2 === 0) ? r : r * 0.28;
+    const px = x + Math.cos(a) * rr;
+    const py = y + Math.sin(a) * rr;
+    if (i === 0) paintCtx.moveTo(px, py); else paintCtx.lineTo(px, py);
+  }
+  paintCtx.closePath();
+  paintCtx.fill();
+  paintCtx.restore();
 }
 
 function emitSparkles(p) {
