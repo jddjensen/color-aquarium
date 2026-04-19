@@ -815,6 +815,16 @@ canvas.addEventListener('pointerup', endStroke);
 canvas.addEventListener('pointercancel', endStroke);
 canvas.addEventListener('pointerleave', endStroke);
 
+// iOS Safari belt-and-suspenders: even with touch-action:none, a stray
+// two-finger gesture or a long-press can still trigger the system's
+// selection / zoom / callout behavior. Swallow those on the canvas.
+canvas.addEventListener('touchstart', (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+canvas.addEventListener('touchmove',  (e) => { if (e.cancelable) e.preventDefault(); }, { passive: false });
+canvas.addEventListener('gesturestart', (e) => e.preventDefault());
+canvas.addEventListener('gesturechange', (e) => e.preventDefault());
+canvas.addEventListener('gestureend', (e) => e.preventDefault());
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
 function strokeAt(a, b) {
   paintCtx.lineCap = 'round';
   paintCtx.lineJoin = 'round';

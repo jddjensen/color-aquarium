@@ -1,14 +1,33 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; font-family: 'Comic Sans MS', 'Chalkboard SE', system-ui, sans-serif; }
-body { background: #eaf7ff; color: #113; }
+body {
+  background: #eaf7ff;
+  color: #113;
+  /* iOS Safari: kill the gray tap flash on buttons / cards. */
+  -webkit-tap-highlight-color: transparent;
+  /* Prevent pull-to-refresh / over-scroll bounce that can interrupt drawing. */
+  overscroll-behavior: none;
+  /* Smooth font rendering + stop iOS from auto-inflating text on rotate. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+button, a, .fish-card, .tool-btn, .swatch, .sticker-swatch, .big-btn {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
 
 /* ---------- Landing ---------- */
 body.landing {
   min-height: 100vh;
+  /* iOS Safari: dynamic viewport unit accounts for the URL bar so content
+     isn't hidden behind the browser chrome. Older Safari ignores this and
+     keeps the 100vh fallback above. */
+  min-height: 100dvh;
   display: grid;
   place-items: center;
   background: linear-gradient(180deg, #7ac6ff 0%, #0a3d62 100%);
   color: white;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 .landing-inner { text-align: center; padding: 2rem; }
 .landing-inner h1 { font-size: clamp(2.5rem, 7vw, 5rem); margin: 0; text-shadow: 0 4px 0 rgba(0,0,0,.2); }
@@ -33,6 +52,7 @@ body.landing {
 /* ---------- Color page ---------- */
 body.color {
   min-height: 100vh;
+  min-height: 100dvh;
   background: linear-gradient(180deg, #cdeffd, #a3d9f5);
   display: flex;
   flex-direction: column;
@@ -44,11 +64,13 @@ body.color {
   inset: 0;
   display: grid;
   place-items: center;
-  padding: 2rem;
+  padding: calc(2rem + env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-right))
+           calc(2rem + env(safe-area-inset-bottom)) calc(2rem + env(safe-area-inset-left));
   background: linear-gradient(180deg, #7ac6ff 0%, #0a3d62 100%);
   color: white;
   z-index: 5;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
   transition: opacity .45s ease;
 }
 .fish-select[hidden] { display: none; }
@@ -123,6 +145,8 @@ body.color {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  min-height: 100dvh;
+  padding-bottom: env(safe-area-inset-bottom);
   transition: opacity .35s ease;
 }
 .coloring-view[hidden] { display: none; }
@@ -141,7 +165,8 @@ body.color {
 .link-btn:hover { text-decoration: underline; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
-  padding: .75rem 1rem;
+  padding: calc(.75rem + env(safe-area-inset-top)) calc(1rem + env(safe-area-inset-right))
+           .75rem calc(1rem + env(safe-area-inset-left));
   background: #0a3d62; color: white;
 }
 .topbar h1 { margin: 0; font-size: 1.25rem; }
@@ -180,7 +205,20 @@ body.color {
   overflow: hidden;
   min-height: 300px;
 }
-canvas { max-width: 100%; height: auto; display: block; touch-action: none; border-radius: 8px; cursor: crosshair; }
+canvas {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  /* touch-action: none keeps iOS from hijacking single-finger drags for scroll
+     or pinch-zoom while the child is painting. */
+  touch-action: none;
+  -ms-touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  border-radius: 8px;
+  cursor: crosshair;
+}
 
 .tools { display: flex; flex-direction: column; gap: .75rem; }
 .panel {
@@ -267,10 +305,13 @@ canvas { max-width: 100%; height: auto; display: block; touch-action: none; bord
   border-radius: 10px;
   border: 2px solid #0a3d62;
   font-family: inherit;
-  font-size: 1rem;
+  /* Minimum 16px keeps iOS Safari from auto-zooming on focus. */
+  font-size: 16px;
   outline: none;
   background: #fafdff;
   color: #0a3d62;
+  -webkit-appearance: none;
+  appearance: none;
 }
 .actions input[type="text"]:focus {
   border-color: #ff7a59;
@@ -365,6 +406,11 @@ body.aquarium {
   background: #001018;
   overflow: hidden;
   height: 100vh;
+  /* iOS Safari / Android Chrome: collapse around the dynamic URL bar so the
+     tank fills what's actually visible instead of being clipped. */
+  height: 100dvh;
+  position: fixed;
+  inset: 0;
 }
 #aquarium {
   position: fixed; inset: 0;
@@ -921,7 +967,8 @@ body.aquarium {
 .aquarium-topbar {
   position: fixed; top: 0; left: 0; right: 0;
   display: flex; justify-content: space-between; align-items: center;
-  padding: .6rem 1rem;
+  padding: calc(.6rem + env(safe-area-inset-top)) calc(1rem + env(safe-area-inset-right))
+           .6rem calc(1rem + env(safe-area-inset-left));
   color: white;
   background: linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,0));
   z-index: 10;

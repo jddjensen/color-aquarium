@@ -2174,7 +2174,7 @@ if (resetBtn) {
   });
 }
 
-window.addEventListener('resize', () => {
+function handleViewportResize() {
   if (caustics) caustics.resize();
   const W = window.innerWidth, H = window.innerHeight;
   for (const f of fishById.values()) {
@@ -2182,4 +2182,12 @@ window.addEventListener('resize', () => {
     f.x = Math.min(Math.max(f.x, 0), W - 50);
     f.y = Math.min(Math.max(f.y, 40), H - 80);
   }
-});
+}
+window.addEventListener('resize', handleViewportResize);
+// iOS Safari: the URL bar show/hide does not always fire a standard resize
+// event on older versions. visualViewport.resize catches it reliably so the
+// tank reflows when the browser chrome collapses.
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', handleViewportResize);
+}
+window.addEventListener('orientationchange', handleViewportResize);
