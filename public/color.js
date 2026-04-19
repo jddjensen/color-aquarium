@@ -1,10 +1,18 @@
 // ---------- Config ----------
+// Aquarium animals. The `id` becomes the stored species and drives behavior
+// (habitat, locomotion, ecosystem role) on the aquarium side.
 const FISH = [
   { id: 'fish1',    src: '/assets/fish1.png',    label: 'Goldie' },
   { id: 'fish2',    src: '/assets/fish2.png',    label: 'Angel' },
   { id: 'fish3',    src: '/assets/fish3.png',    label: 'Clown' },
+  { id: 'fish4',    src: '/assets/fish4.png',    label: 'Blue Tang' },
+  { id: 'fish5',    src: '/assets/fish5.png',    label: 'Tropical' },
   { id: 'puffer1',  src: '/assets/Puffer1.png',  label: 'Puffer' },
   { id: 'seahorse1',src: '/assets/seahorse1.png',label: 'Seahorse' },
+  { id: 'eel1',     src: '/assets/eel1.png',     label: 'Eel' },
+  { id: 'stingray1',src: '/assets/stingray1.png',label: 'Sting Ray' },
+  { id: 'seaslug1', src: '/assets/seaslug1.png', label: 'Sea Slug' },
+  { id: 'shark1',   src: '/assets/shark1.png',   label: 'Shark' },
 ];
 
 const PALETTE = [
@@ -21,11 +29,15 @@ const WHITE_THRESHOLD = 735; // ~ > 245 per channel average
 // ---------- DOM ----------
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d', { willReadFrequently: true });
-const picker = document.getElementById('picker');
 const colorsEl = document.getElementById('colors');
 const sizeEl = document.getElementById('size');
 const sizeLabel = document.getElementById('sizeLabel');
 const toastEl = document.getElementById('toast');
+const fishSelectEl = document.getElementById('fishSelect');
+const fishGridEl = document.getElementById('fishGrid');
+const acceptBtn = document.getElementById('acceptFish');
+const coloringViewEl = document.getElementById('coloringView');
+const changeFishBtn = document.getElementById('changeFish');
 
 // Offscreen layers (sized to canvas)
 const artCanvas   = document.createElement('canvas'); // the fish line art
@@ -39,7 +51,8 @@ artCanvas.width = paintCanvas.width = maskCanvas.width = canvas.width;
 artCanvas.height = paintCanvas.height = maskCanvas.height = canvas.height;
 
 // ---------- State ----------
-let currentFish = FISH[0];
+let currentFish = null;         // chosen from the fish-select screen
+let pendingFish = null;         // highlighted but not yet accepted
 let currentColor = PALETTE[0];
 let currentTool = 'brush';
 let brushSize = 18;
@@ -126,19 +139,77 @@ let currentSticker = null;
 let stickerPreview = null;
 const STICKER_CANVAS_SIZE = 120; // size in canvas px when placed
 
-// ---------- Setup UI ----------
-FISH.forEach((f, i) => {
-  const btn = document.createElement('button');
-  btn.innerHTML = `<img src="${f.src}" alt="${f.label}" />`;
-  btn.title = f.label;
-  if (i === 0) btn.classList.add('active');
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.picker button').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    loadFish(f);
+// ---------- Fish-select screen ----------
+FISH.forEach((f) => {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'fish-card';
+  card.dataset.fishId = f.id;
+  card.innerHTML = `<img src="${f.src}" alt="${f.label}" /><span>${f.label}</span>`;
+  card.addEventListener('click', () => {
+    document.querySelectorAll('.fish-card').forEach((c) => c.classList.remove('active'));
+    card.classList.add('active');
+    pendingFish = f;
+    acceptBtn.disabled = false;
   });
-  picker.appendChild(btn);
+  fishGridEl.appendChild(card);
 });
+acceptBtn.addEventListener('click', () => {
+  if (!pendingFish) return;
+  enterColoringView(pendingFish);
+});
+changeFishBtn.addEventListener('click', () => {
+  // Bail out back to the selection screen without submitting.
+  if (anyPaintApplied() && !confirm('Go back? Your current coloring will be lost.')) return;
+  returnToSelectView();
+});
+
+function enterColoringView(fish) {
+  currentFish = fish;
+  // Fade the select screen out, swap, fade the coloring view in.
+  fishSelectEl.classList.add('leaving');
+  setTimeout(() => {
+    fishSelectEl.hidden = true;
+    fishSelectEl.classList.remove('leaving');
+    coloringViewEl.hidden = false;
+    coloringViewEl.classList.add('entering');
+    requestAnimationFrame(() => coloringViewEl.classList.remove('entering'));
+    loadFish(fish);
+  }, 350);
+}
+
+function returnToSelectView() {
+  // Reset coloring state so the next guest starts clean.
+  paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
+  undoStack.length = 0;
+  const nameInput = document.getElementById('fishName');
+  if (nameInput) nameInput.value = '';
+  document.querySelectorAll('.fish-card').forEach((c) => c.classList.remove('active'));
+  pendingFish = null;
+  currentFish = null;
+  acceptBtn.disabled = true;
+
+  coloringViewEl.classList.add('entering');
+  setTimeout(() => {
+    coloringViewEl.hidden = true;
+    coloringViewEl.classList.remove('entering');
+    fishSelectEl.hidden = false;
+    fishSelectEl.classList.add('leaving');
+    requestAnimationFrame(() => fishSelectEl.classList.remove('leaving'));
+  }, 300);
+}
+
+function anyPaintApplied() {
+  try {
+    const d = paintCtx.getImageData(0, 0, paintCanvas.width, paintCanvas.height).data;
+    for (let i = 3; i < d.length; i += 4) {
+      if (d[i] > 0) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 PALETTE.forEach((c, i) => {
   const sw = document.createElement('div');
@@ -588,11 +659,6 @@ async function submit() {
     showLookUpBanner();
     await swim;
 
-    paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
-    if (nameInput) nameInput.value = '';
-    undoStack.length = 0;
-    render();
-
     // Hold the banner a bit longer so guests' eyes reach the TV in time for the splash.
     await wait(1400);
     hideLookUpBanner();
@@ -600,6 +666,11 @@ async function submit() {
     toast(fishName
       ? `${fishName} is swimming in the aquarium!`
       : 'Your fish is swimming in the aquarium!');
+
+    // New flow: once the fish is on its way, hand the iPad to the next guest
+    // by returning to the fish-select screen.
+    await wait(500);
+    returnToSelectView();
   } catch (e) {
     console.error(e);
     hideLookUpBanner();
@@ -681,4 +752,8 @@ function toast(msg) {
 }
 
 // ---------- Go ----------
-loadFish(FISH[0]);
+// Don't pre-load a fish — the guest picks on the fish-select screen first.
+// A fallback render keeps the coloring canvas visually neutral if it ever
+// becomes visible before a fish is chosen.
+ctx.fillStyle = 'white';
+ctx.fillRect(0, 0, canvas.width, canvas.height);

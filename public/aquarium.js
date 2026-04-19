@@ -97,6 +97,26 @@ function mulberry32(seed) {
 
 const PATTERNS = ['wavy', 'darter', 'circler', 'glider', 'zigzag'];
 
+// ---- Species traits: habitat, locomotion, ecosystem role ----
+// yMinF/yMaxF are fractions of viewport height (0 = top, 1 = bottom).
+// locomotion drives wiggle style: swimmer (default), floater (seahorse),
+// slitherer (eel — heavy body wave), glider (sting ray — subtle flap),
+// crawler (sea slug — barely moves), predator (shark — large, solo).
+const SPECIES_TRAITS = {
+  fish1:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.70, speedMul: 1.00 },
+  fish2:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
+  fish3:     { locomotion: 'swimmer',   yMinF: 0.15, yMaxF: 0.65, speedMul: 1.00 },
+  fish4:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.68, speedMul: 1.00 },
+  fish5:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
+  puffer1:   { locomotion: 'swimmer',   yMinF: 0.28, yMaxF: 0.75, speedMul: 0.75 },
+  seahorse1: { locomotion: 'floater',   yMinF: 0.25, yMaxF: 0.70, speedMul: 0.45 },
+  eel1:      { locomotion: 'slitherer', yMinF: 0.70, yMaxF: 0.90, speedMul: 0.70, ampMul: 2.6, freqMul: 0.85 },
+  stingray1: { locomotion: 'glider',    yMinF: 0.72, yMaxF: 0.90, speedMul: 0.70, ampMul: 0.30, flap: true },
+  seaslug1:  { locomotion: 'crawler',   yMinF: 0.92, yMaxF: 0.98, speedMul: 0.15, ampMul: 0.00 },
+  shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260 },
+};
+const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0 };
+
 function createShader(gl, type, source) {
   const shader = gl.createShader(type);
   if (!shader) return null;
@@ -274,11 +294,18 @@ class Fish {
     this.createdAt = meta.createdAt;
     this.name = (meta.name || '').trim();
     this.species = (meta.species || '').toLowerCase();
+    this.traits = SPECIES_TRAITS[this.species] || DEFAULT_TRAITS;
+    this.locomotion = this.traits.locomotion;
     this.isPuffer = this.species === 'puffer1';
+    this.isShark = this.species === 'shark1';
+    this.isPrey = this.locomotion === 'swimmer' && !this.isShark;
     // Puff-up state: 0..1 scale overlay on the sprite.
     this.puffLevel = 0;
     this.puffTarget = 0;
     this.puffTimer = this.isPuffer ? (30 + Math.random() * 60) : Infinity;
+    // Scare response (prey fish bolting from a nearby predator).
+    this.scareTTL = 0;
+    this.scareDir = { x: 0, y: 0 };
 
     this.rand = mulberry32(hashStr(meta.id));
     this.pattern = PATTERNS[Math.floor(this.rand() * PATTERNS.length)];
@@ -325,6 +352,9 @@ class Fish {
         this.wiggleAmpBase *= 0.35;
         this.wiggleBase *= 0.6;
       }
+      // Species-trait wiggle overrides (applied after seahorse-by-aspect detection).
+      if (this.traits.ampMul !== undefined) this.wiggleAmpBase *= this.traits.ampMul;
+      if (this.traits.freqMul !== undefined) this.wiggleBase *= this.traits.freqMul;
     });
 
     this.mode = 'featured';
@@ -334,14 +364,17 @@ class Fish {
     this.splashX = 80 + this.rand() * 160;
     this.splashY = 90 + this.rand() * 100;
 
-    this.baseSpeed = (45 + this.rand() * 45) * this.depthSpeed;
+    this.baseSpeed = (45 + this.rand() * 45) * this.depthSpeed * (this.traits.speedMul || 1);
     this.waveAmp = 14 + this.rand() * 22;
     this.wavePeriod = 1.6 + this.rand() * 2.2;
     this.wavePhase = this.rand() * Math.PI * 2;
     this.turnTimer = 0;
-    this.wiggleBase = 0.8 + this.rand() * 0.5;
-    this.wiggleAmpBase = 0.08 + this.rand() * 0.06;
+    // Tail-beat: humans read fish as calm when the tail sweeps slowly, ~1–2 Hz.
+    // Keep the base modest; speed scaling pushes it gently upward.
+    this.wiggleBase = 0.55 + this.rand() * 0.35;     // 0.55 – 0.9 Hz base
+    this.wiggleAmpBase = 0.09 + this.rand() * 0.05;  // 0.09 – 0.14 rad (5°–8°)
     this.wigglePhase = this.rand() * Math.PI * 2;
+    this._wiggleFreq = this.wiggleBase;              // updated per frame
     this.dartCooldown = 0.8 + this.rand() * 1.6;
     this.dartPhase = 'cruise';
     this.circleTheta = this.rand() * Math.PI * 2;
@@ -394,7 +427,8 @@ class Fish {
     if (this.splash) { this.splash.remove(); this.splash = null; }
     const W = window.innerWidth, H = window.innerHeight;
     const baseSize = 80 + this.rand() * 80;
-    const targetSize = baseSize * this.depthScale;
+    const sizeMul = this.traits.sizeMul || 1;
+    const targetSize = baseSize * this.depthScale * sizeMul;
 
     // Smooth shrink from the featured size down to the school size so the fish
     // doesn't visibly "pop" into the background. Filter / opacity transitions
@@ -415,7 +449,11 @@ class Fish {
 
     if (this.x < -1000) {
       this.x = Math.random() * W;
-      this.y = 80 + Math.random() * (H - 160);
+      // Habitat-aware initial placement: bottom-dwellers start near the floor,
+      // floaters in mid-column, swimmers anywhere in their preferred band.
+      const yMin = this.traits.yMinF * H;
+      const yMax = this.traits.yMaxF * H;
+      this.y = yMin + Math.random() * Math.max(1, (yMax - yMin));
     }
 
     const dir = this.vx === 0 ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(this.vx);
@@ -444,6 +482,11 @@ class Fish {
     const W = window.innerWidth, H = window.innerHeight;
     const aspect = this.naturalW / this.naturalH;
 
+    // Tick the tail-beat phase from dt so freq changes don't cause the wave
+    // position to jump — previously it was derived from wall-clock * freq,
+    // which produced the "seizure" jitter whenever speed fluctuated.
+    this.stepWigglePhase(dtMs / 1000);
+
     if (this.mode === 'featured') {
       this.updateFeatured(tMs, W, H, aspect);
       this.updateNameTag(tMs);
@@ -468,10 +511,26 @@ class Fish {
     }
 
     this.stepEncounter(dt);
-    // During chase/flee, the encounter force is dominant — skip idle personality
-    // so the fish commits to the interaction.
-    if (this.encounterState !== 'chase' && this.encounterState !== 'fleeing') {
-      this.stepPersonality(dt, W, H);
+
+    // Prey fish notice predators and bolt on proximity.
+    if (this.isPrey) this.applyPredatorScare();
+
+    if (this.scareTTL > 0) {
+      // Flee response dominates — skip personality / encounters / flocking.
+      this.scareTTL -= dt;
+      const sp = this.baseSpeed * 3.5;
+      this.vx += (this.scareDir.x * sp - this.vx) * 4.0 * dt;
+      this.vy += (this.scareDir.y * sp - this.vy) * 4.0 * dt;
+    } else if (this.encounterState !== 'chase' && this.encounterState !== 'fleeing') {
+      // Locomotion-specific behavior by species.
+      switch (this.locomotion) {
+        case 'crawler':   this.stepCrawler(dt); break;
+        case 'predator':  this.stepPredator(dt, W, H); break;
+        case 'floater':   this.stepFloater(dt, W, H); break;
+        case 'slitherer': this.stepSlitherer(dt, W, H); break;
+        case 'glider':    this.stepGlider(dt, W, H); break;
+        default:          this.stepPersonality(dt, W, H);
+      }
     }
     this.applyEncounterForce(dt);
     this.applyCursorRepulsion(dt);
@@ -486,8 +545,20 @@ class Fish {
 
     if (this.x < -w * 0.25) { this.x = -w * 0.25; this.vx = Math.abs(this.vx); }
     if (this.x > W - w * 0.75) { this.x = W - w * 0.75; this.vx = -Math.abs(this.vx); }
-    if (this.y < 40) { this.y = 40; this.vy = Math.abs(this.vy); }
-    if (this.y > H - h - 20) { this.y = H - h - 20; this.vy = -Math.abs(this.vy); }
+    // Soft habitat clamping: each species prefers its own vertical band.
+    // A gentle spring pulls strayed animals back into range; hard walls at the
+    // absolute viewport edges prevent leaving the tank.
+    const yMinHabitat = Math.max(40, this.traits.yMinF * H);
+    const yMaxHabitat = Math.min(H - h - 20, this.traits.yMaxF * H);
+    if (this.y < yMinHabitat) {
+      const over = yMinHabitat - this.y;
+      this.vy += Math.min(over, 40) * 1.5 * dt;
+    } else if (this.y > yMaxHabitat) {
+      const over = this.y - yMaxHabitat;
+      this.vy -= Math.min(over, 40) * 1.5 * dt;
+    }
+    if (this.y < 20) { this.y = 20; this.vy = Math.abs(this.vy); }
+    if (this.y > H - h - 10) { this.y = H - h - 10; this.vy = -Math.abs(this.vy); }
 
     this.renderSprite(this.x, this.y, w, h, this.vx, this.vy);
     this.updateNameTag(tMs);
@@ -537,6 +608,8 @@ class Fish {
   }
 
   applyFlocking(dt) {
+    // Solitary / sedentary animals don't school.
+    if (this.locomotion === 'predator' || this.locomotion === 'crawler') return;
     // Species-weighted boids: same-species neighbors dominate the alignment /
     // cohesion averages so fish of the same kind naturally school tighter,
     // while different species still politely steer around each other.
@@ -601,6 +674,8 @@ class Fish {
   // Fish occasionally notice each other and enter a brief interaction:
   // chase, orbit, or curious approach. Each type has its own steering force.
   stepEncounter(dt) {
+    // Predators and bottom-crawlers don't play the social-encounter game.
+    if (this.locomotion === 'predator' || this.locomotion === 'crawler') return;
     if (this.encounterState) {
       this.encounterTTL -= dt;
       const t = this.encounterTarget;
@@ -624,6 +699,8 @@ class Fish {
     for (const other of fishById.values()) {
       if (other === this || other.mode !== 'school' || !other.loaded) continue;
       if (other.encounterState) continue;
+      // Skip sharks (intimidating) and sea slugs (oblivious) as encounter partners.
+      if (other.locomotion === 'predator' || other.locomotion === 'crawler') continue;
       const ox = other.x + other.size * 0.5;
       const oy = other.y + other.size * 0.5;
       const d = Math.hypot(ox - myCx, oy - myCy);
@@ -716,7 +793,104 @@ class Fish {
     }
   }
 
+  // ---------- Predator ecosystem ----------
+  // Prey fish check for nearby sharks; on contact inside the shark's
+  // intimidate radius they bolt directly away for 1.5–2.5s. Puffers inflate.
+  applyPredatorScare() {
+    if (this.scareTTL > 0) return;
+    const myCx = this.x + this.size * 0.5;
+    const myCy = this.y + this.size * 0.5;
+    for (const other of fishById.values()) {
+      if (!other.isShark || other.mode !== 'school' || !other.loaded) continue;
+      const r = other.traits.intimidateRadius || 220;
+      const dx = (other.x + other.size * 0.5) - myCx;
+      const dy = (other.y + other.size * 0.5) - myCy;
+      const d = Math.hypot(dx, dy);
+      if (d > r || d < 0.001) continue;
+      this.scareTTL = 1.5 + this.rand() * 1.0;
+      this.scareDir = { x: -dx / d, y: -dy / d };
+      // Puffer defense: inflate when the shark gets close.
+      if (this.isPuffer && this.puffTarget === 0) {
+        this.puffTarget = 1;
+        setTimeout(() => { this.puffTarget = 0; }, 1400 + this.rand() * 800);
+        this.puffTimer = 60 + this.rand() * 120;
+      }
+      return;
+    }
+  }
+
+  // ---------- Locomotion helpers ----------
+  stepCrawler(dt) {
+    // Sea slug: barely moves. Heavy drag + rare nudge to a new spot.
+    this.vx *= Math.pow(0.35, dt);
+    this.vy *= Math.pow(0.25, dt);
+    this.turnTimer -= dt;
+    if (this.turnTimer <= 0) {
+      this.turnTimer = 10 + this.rand() * 25;
+      this.vx = (this.rand() - 0.5) * this.baseSpeed * 2.2;
+      this.vy = (this.rand() - 0.5) * 4;
+    }
+  }
+
+  stepPredator(dt) {
+    // Shark: slow relentless cruise, occasional long turns.
+    this.turnTimer -= dt;
+    if (this.turnTimer <= 0) {
+      this.turnTimer = 7 + this.rand() * 6;
+      const keep = this.rand() < 0.8;
+      const dir = keep ? Math.sign(this.vx || 1) : -Math.sign(this.vx || 1);
+      this.vx = dir * this.baseSpeed * (0.9 + this.rand() * 0.3);
+      this.vy = (this.rand() - 0.5) * 18;
+    }
+    this.wavePhase += dt * 0.9;
+    this.vy += Math.sin(this.wavePhase) * 5 * dt;
+  }
+
+  stepFloater(dt) {
+    // Seahorse: hovers with a gentle vertical bob, minor horizontal drift.
+    this.wavePhase += dt * 1.4;
+    this.vy += Math.sin(this.wavePhase) * 7 * dt;
+    this.turnTimer -= dt;
+    if (this.turnTimer <= 0) {
+      this.turnTimer = 4 + this.rand() * 8;
+      this.vx = (this.rand() - 0.5) * this.baseSpeed * 1.6;
+    }
+    this.vx *= Math.pow(0.7, dt);
+  }
+
+  stepSlitherer(dt, W, H) {
+    // Eel: hugs the bottom, continuous horizontal motion with a slow
+    // large-amplitude vertical wave along its body (body wiggle already
+    // amplified via traits.ampMul). Reverses direction rarely.
+    this.wavePhase += dt * 1.2;
+    this.vy += Math.sin(this.wavePhase) * 10 * dt;
+    this.turnTimer -= dt;
+    if (this.turnTimer <= 0) {
+      this.turnTimer = 6 + this.rand() * 8;
+      if (this.rand() < 0.2) this.vx = -this.vx;
+      else this.vx = Math.sign(this.vx || 1) * this.baseSpeed * (0.85 + this.rand() * 0.3);
+    }
+  }
+
+  stepGlider(dt) {
+    // Sting ray: smooth slow glide. Very gentle heading wander.
+    this.turnTimer -= dt;
+    if (this.turnTimer <= 0) {
+      this.turnTimer = 5 + this.rand() * 6;
+      const heading = Math.atan2(this.vy, this.vx || (this.rand() < 0.5 ? -1 : 1));
+      const delta = (this.rand() - 0.5) * 0.5;
+      const nh = heading + delta;
+      this.vx = Math.cos(nh) * this.baseSpeed * (0.85 + this.rand() * 0.3);
+      this.vy = Math.sin(nh) * this.baseSpeed * 0.4;
+    }
+    this.wavePhase += dt * 0.8;
+    this.vy += Math.sin(this.wavePhase) * 3 * dt;
+  }
+
   stepIdle(dt, tMs) {
+    // Predators / floaters / crawlers have their own pacing; skip random pauses.
+    if (this.locomotion === 'predator' || this.locomotion === 'crawler'
+        || this.locomotion === 'floater' || this.locomotion === 'glider') return;
     if (this.isIdle) {
       this.idleDuration -= dt;
       if (this.idleDuration <= 0) {
@@ -975,17 +1149,27 @@ class Fish {
     }
   }
 
+  stepWigglePhase(dt) {
+    // Tail-beat frequency: modest at rest, saturating smoothly with speed.
+    // tanh keeps fast-moving fish from going frenetic (caps near ~1.7× base).
+    const speed = Math.hypot(this.vx, this.vy);
+    const speedK = 1.0 + 0.7 * Math.tanh(speed / 110);
+    const dartBoost = this.dartPhase === 'dart' ? 1.2 : 1;
+    this._wiggleFreq = this.wiggleBase * speedK * dartBoost;
+    this.wigglePhase += dt * this._wiggleFreq * Math.PI * 2;
+  }
+
   renderSprite(x, y, w, h, vx, vy) {
     const speed = Math.hypot(vx, vy);
-    const now = performance.now() / 1000;
-    const freq = this.wiggleBase * (1.4 + Math.min(2.5, speed / 60));
-    const phase = now * freq * Math.PI * 2 + this.wigglePhase;
-    const speedScale = 0.6 + Math.min(1.6, speed / 80);
-    const dartBoost = this.dartPhase === 'dart' ? 1.6 : 1;
-    const shapeScale = this.isSeahorse ? 0.5 : 1;
-    const ampRad = this.wiggleAmpBase * speedScale * dartBoost * shapeScale;
-    const skewY = Math.sin(phase) * ampRad;
-    const squashX = 1 + Math.cos(phase * 2) * 0.025;
+    // Amplitude grows smoothly with speed via tanh so it saturates instead of
+    // ballooning into over-bent contortions at dart speed.
+    const speedAmp = 0.85 + 0.35 * Math.tanh(speed / 120);
+    const dartBoost = this.dartPhase === 'dart' ? 1.25 : 1;
+    const shapeScale = this.isSeahorse ? 0.55 : 1;
+    const ampRad = this.wiggleAmpBase * speedAmp * dartBoost * shapeScale;
+    // Single sinusoid = clean sweep of the tail. The body-length pulse that
+    // used to run at 2× frequency is removed — it was fighting the wave.
+    const skewY = Math.sin(this.wigglePhase) * ampRad;
 
     const movingRight = vx > 0;
     const flip = movingRight ? -1 : 1;
@@ -1008,7 +1192,13 @@ class Fish {
     this.el.style.transform = `translate(${tx}px, ${ty}px) scale(${puffScale})`;
     this.flipEl.style.transform = `scaleX(${flip})`;
     this.pitchEl.style.transform = `rotate(${clamped}rad)`;
-    this.wiggleEl.style.transform = `skewY(${skewY}rad) scaleX(${squashX})`;
+    // Sting rays get a subtle vertical "wing flap" on top of the tail skew.
+    const wiggleParts = [`skewY(${skewY}rad)`];
+    if (this.traits && this.traits.flap) {
+      const flap = 1 + Math.sin(this.wigglePhase * 0.6) * 0.12;
+      wiggleParts.push(`scaleY(${flap})`);
+    }
+    this.wiggleEl.style.transform = wiggleParts.join(' ');
     this.renderShadow(x, y, w, h, vx);
   }
 
