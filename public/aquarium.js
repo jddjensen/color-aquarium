@@ -1,6 +1,7 @@
 const aq = document.getElementById('aquarium');
 const countEl = document.getElementById('count');
 const bubblesLayer = document.getElementById('bubbles');
+const causticsCanvas = document.getElementById('caustics');
 
 /** @type {Map<string, Fish>} */
 const fishById = new Map();
@@ -17,6 +18,52 @@ const CINEMATIC_HOLD_MS = CINEMATIC_INTRO_MS + SPLASH_FALL_MS + SPLASH_BURST_MS 
 const FEATURE_TOTAL_MS = CINEMATIC_INTRO_MS + SPLASH_FALL_MS + SPLASH_BURST_MS + FEATURE_SWIM_MS;
 
 const NAME_SHOW_MS = 4500;
+
+// Honor the user's system-level motion preference.
+const REDUCE_MOTION_QUERY = window.matchMedia('(prefers-reduced-motion: reduce)');
+let REDUCE_MOTION = REDUCE_MOTION_QUERY.matches;
+if (REDUCE_MOTION_QUERY.addEventListener) {
+  REDUCE_MOTION_QUERY.addEventListener('change', (e) => { REDUCE_MOTION = e.matches; });
+}
+
+// ---- Day/night tint: warm→cool filter sweep by local hour ----
+const TINT_KEYFRAMES = [
+  { h: 0,  b: .78, hue: -8,  sat: .90, sep: .00 },
+  { h: 5,  b: .82, hue: -6,  sat: .92, sep: .00 },
+  { h: 7,  b: .96, hue:  8,  sat: 1.06, sep: .08 },
+  { h: 10, b: 1.00, hue: 0,  sat: 1.00, sep: .00 },
+  { h: 14, b: 1.02, hue: 0,  sat: 1.00, sep: .00 },
+  { h: 18, b: 0.98, hue: 12, sat: 1.10, sep: .12 },
+  { h: 20, b: 0.88, hue:  4, sat: 1.00, sep: .04 },
+  { h: 22, b: 0.80, hue: -4, sat: 0.92, sep: .00 },
+  { h: 24, b: 0.78, hue: -8, sat: 0.90, sep: .00 },
+];
+function lerp(a, b, t) { return a + (b - a) * t; }
+function tintForHour(h) {
+  h = ((h % 24) + 24) % 24;
+  for (let i = 0; i < TINT_KEYFRAMES.length - 1; i++) {
+    const a = TINT_KEYFRAMES[i], c = TINT_KEYFRAMES[i + 1];
+    if (h >= a.h && h <= c.h) {
+      const t = (h - a.h) / (c.h - a.h);
+      return {
+        b: lerp(a.b, c.b, t),
+        hue: lerp(a.hue, c.hue, t),
+        sat: lerp(a.sat, c.sat, t),
+        sep: lerp(a.sep, c.sep, t),
+      };
+    }
+  }
+  return TINT_KEYFRAMES[0];
+}
+function applyDayNightTint() {
+  const now = new Date();
+  const h = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+  const t = tintForHour(h);
+  const filter = `brightness(${t.b.toFixed(3)}) saturate(${t.sat.toFixed(3)}) sepia(${t.sep.toFixed(3)}) hue-rotate(${t.hue.toFixed(1)}deg)`;
+  document.documentElement.style.setProperty('--tint', filter);
+}
+applyDayNightTint();
+setInterval(applyDayNightTint, 60 * 1000);
 
 // Cursor tracking for fish repulsion.
 const cursor = { x: -9999, y: -9999, active: false };
@@ -49,6 +96,157 @@ function mulberry32(seed) {
 }
 
 const PATTERNS = ['wavy', 'darter', 'circler', 'glider', 'zigzag'];
+
+function createShader(gl, type, source) {
+  const shader = gl.createShader(type);
+  if (!shader) return null;
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return shader;
+  console.warn('caustics shader compile failed', gl.getShaderInfoLog(shader));
+  gl.deleteShader(shader);
+  return null;
+}
+
+function createProgram(gl, vertexSource, fragmentSource) {
+  const vertex = createShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fragment = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+  if (!vertex || !fragment) {
+    if (vertex) gl.deleteShader(vertex);
+    if (fragment) gl.deleteShader(fragment);
+    return null;
+  }
+  const program = gl.createProgram();
+  if (!program) return null;
+  gl.attachShader(program, vertex);
+  gl.attachShader(program, fragment);
+  gl.linkProgram(program);
+  gl.deleteShader(vertex);
+  gl.deleteShader(fragment);
+  if (gl.getProgramParameter(program, gl.LINK_STATUS)) return program;
+  console.warn('caustics program link failed', gl.getProgramInfoLog(program));
+  gl.deleteProgram(program);
+  return null;
+}
+
+function initCaustics(canvas) {
+  if (!canvas) return null;
+
+  const gl = canvas.getContext('webgl', {
+    alpha: true,
+    antialias: false,
+    depth: false,
+    premultipliedAlpha: true,
+    stencil: false,
+  });
+  if (!gl) {
+    canvas.classList.add('caustics-fallback');
+    return null;
+  }
+
+  const vertexSource = `
+    attribute vec2 aPos;
+    void main() {
+      gl_Position = vec4(aPos, 0.0, 1.0);
+    }
+  `;
+
+  const fragmentSource = `
+    precision highp float;
+    uniform vec2 uResolution;
+    uniform float uTime;
+
+    mat2 rot(float a) {
+      float s = sin(a), c = cos(a);
+      return mat2(c, -s, s, c);
+    }
+
+    float caustic(vec2 p) {
+      float t = uTime * 0.22;
+      float glow = 0.0;
+      p *= 2.8;
+      for (int i = 0; i < 3; i++) {
+        p += vec2(sin(p.y * 2.1 + t), cos(p.x * 1.7 - t)) * 0.28;
+        float ridge = sin(p.x + sin(p.y + t)) + cos(p.y + cos(p.x - t));
+        glow += abs(ridge);
+        p = rot(0.9) * p * 1.32;
+        t *= 1.17;
+      }
+      return pow(max(0.0, 1.75 - glow), 4.5);
+    }
+
+    void main() {
+      vec2 uv = gl_FragCoord.xy / uResolution.xy;
+      vec2 p = (uv - 0.5) * vec2(uResolution.x / uResolution.y, 1.0);
+      p.y += uTime * 0.03;
+
+      float band = smoothstep(-0.55, 0.35, uv.y) * (1.0 - smoothstep(0.78, 1.02, uv.y));
+      float c = caustic(p);
+      c += caustic(p * 1.6 + vec2(1.7, -1.2)) * 0.35;
+      c *= band;
+
+      vec3 col = mix(vec3(0.08, 0.24, 0.34), vec3(0.76, 0.95, 1.0), c);
+      float alpha = clamp(c * 0.34, 0.0, 0.34);
+      gl_FragColor = vec4(col, alpha);
+    }
+  `;
+
+  const program = createProgram(gl, vertexSource, fragmentSource);
+  if (!program) {
+    canvas.classList.add('caustics-fallback');
+    return null;
+  }
+
+  const positionLoc = gl.getAttribLocation(program, 'aPos');
+  const timeLoc = gl.getUniformLocation(program, 'uTime');
+  const resolutionLoc = gl.getUniformLocation(program, 'uResolution');
+  const quad = gl.createBuffer();
+  if (positionLoc < 0 || !timeLoc || !resolutionLoc || !quad) {
+    canvas.classList.add('caustics-fallback');
+    return null;
+  }
+
+  gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+    -1, -1,
+     1, -1,
+    -1,  1,
+     1,  1,
+  ]), gl.STATIC_DRAW);
+  gl.disable(gl.DEPTH_TEST);
+
+  function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const width = Math.max(1, Math.round((canvas.clientWidth || window.innerWidth) * dpr));
+    const height = Math.max(1, Math.round((canvas.clientHeight || window.innerHeight) * dpr));
+    if (canvas.width === width && canvas.height === height) return;
+    canvas.width = width;
+    canvas.height = height;
+    gl.viewport(0, 0, width, height);
+  }
+
+  resize();
+  canvas.classList.remove('caustics-fallback');
+
+  return {
+    resize,
+    render(nowMs) {
+      resize();
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.useProgram(program);
+      gl.bindBuffer(gl.ARRAY_BUFFER, quad);
+      gl.enableVertexAttribArray(positionLoc);
+      gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform1f(timeLoc, nowMs * 0.001);
+      gl.uniform2f(resolutionLoc, canvas.width, canvas.height);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    },
+  };
+}
+
+const caustics = initCaustics(causticsCanvas);
 
 class Fish {
   constructor(meta) {
@@ -88,6 +286,14 @@ class Fish {
     this.pitchEl.appendChild(this.wiggleEl);
     this.flipEl.appendChild(this.pitchEl);
     this.el.appendChild(this.flipEl);
+    this.shadowEl = document.createElement('img');
+    this.shadowEl.className = 'fish-shadow';
+    this.shadowEl.src = this.url;
+    this.shadowEl.alt = '';
+    this.shadowEl.draggable = false;
+    this.shadowEl.setAttribute('aria-hidden', 'true');
+    this.shadowEl.style.opacity = '0';
+    aq.appendChild(this.shadowEl);
     aq.appendChild(this.el);
 
     this.loaded = false;
@@ -103,6 +309,7 @@ class Fish {
     });
 
     this.mode = 'featured';
+    this.cinematicPending = false;
     this.phaseStart = performance.now();
 
     this.splashX = 80 + this.rand() * 160;
@@ -222,10 +429,12 @@ class Fish {
     this.updateNameTag(tMs);
 
     // Occasional bubble emission from the fish's head region.
-    this.bubbleTimer -= dt;
-    if (this.bubbleTimer <= 0) {
-      this.bubbleTimer = 4 + this.rand() * 8;
-      this.emitBubble(w, h);
+    if (!REDUCE_MOTION) {
+      this.bubbleTimer -= dt;
+      if (this.bubbleTimer <= 0) {
+        this.bubbleTimer = 4 + this.rand() * 8;
+        this.emitBubble(w, h);
+      }
     }
 
     // Puffer-only: rare puff-up behavior.
@@ -372,6 +581,13 @@ class Fish {
   }
 
   updateFeatured(tMs, W, H, aspect) {
+    // Parked in the cinematic queue behind another arrival — stay hidden.
+    if (this.cinematicPending) {
+      this.el.style.width = '10px';
+      this.el.style.height = '10px';
+      this.el.style.transform = 'translate(-9999px, -9999px)';
+      return;
+    }
     const rawT = tMs - this.phaseStart;
 
     // Phase 0: cinematic intro — keep fish off-screen while dim+banner+camera ramp up.
@@ -599,6 +815,30 @@ class Fish {
     this.flipEl.style.transform = `scaleX(${flip})`;
     this.pitchEl.style.transform = `rotate(${clamped}rad)`;
     this.wiggleEl.style.transform = `skewY(${skewY}rad) scaleX(${squashX})`;
+    this.renderShadow(x, y, w, h, vx);
+  }
+
+  renderShadow(x, y, w, h, vx) {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const floorY = H - Math.max(62, Math.min(108, H * 0.12));
+    const fishCx = x + w * 0.5;
+    const fishCy = y + h * 0.55;
+    const heightOffFloor = Math.max(0, floorY - fishCy);
+    const lift = Math.min(1, heightOffFloor / Math.max(1, H * 0.6));
+    const driftX = (W * 0.5 - fishCx) * 0.08;
+    const stretchX = 0.92 + (1 - lift) * 0.14;
+    const blur = 6 + lift * 12 + (this.depth === 'far' ? 2.5 : 0);
+    const opacity = 0.1 + (1 - lift) * 0.09 + (this.depth === 'near' ? 0.02 : 0);
+    const flip = vx > 0 ? -1 : 1;
+
+    this.shadowEl.style.width = w + 'px';
+    this.shadowEl.style.height = h + 'px';
+    this.shadowEl.style.opacity = opacity.toFixed(3);
+    this.shadowEl.style.filter = `brightness(0) saturate(0) blur(${blur.toFixed(1)}px)`;
+    this.shadowEl.style.transform =
+      `translate(${(x + driftX).toFixed(1)}px, ${(floorY - h).toFixed(1)}px) ` +
+      `scaleX(${(flip * stretchX).toFixed(3)}) scaleY(0.25)`;
   }
 
   renderBadge(cx, topY) {
@@ -617,6 +857,7 @@ class Fish {
 
   destroy() {
     cinematicEnd(this);
+    this.shadowEl.remove();
     this.el.remove();
     this.badge.remove();
     if (this.splash) this.splash.remove();
@@ -713,6 +954,50 @@ function cinematicEnd(fish) {
   }
 }
 
+// Multiple iPads can submit at once — stagger the arrivals so each gets its own
+// on-screen moment instead of colliding in the spotlight. Fish are parked
+// off-screen (cinematicPending=true) until their slot opens.
+const cinematicQueue = [];
+let cinematicQueueTimer = null;
+let lastCinematicStartAt = -Infinity;
+const MIN_CINEMATIC_GAP_MS = 2500;
+
+function cinematicRequest(fish) {
+  fish.cinematicPending = true;
+  cinematicQueue.push(fish);
+  scheduleCinematicAdvance();
+}
+
+function scheduleCinematicAdvance() {
+  if (cinematicQueueTimer !== null) return;
+  const now = performance.now();
+  const wait = Math.max(0, MIN_CINEMATIC_GAP_MS - (now - lastCinematicStartAt));
+  cinematicQueueTimer = setTimeout(() => {
+    cinematicQueueTimer = null;
+    cinematicAdvance();
+  }, wait);
+}
+
+function cinematicAdvance() {
+  while (cinematicQueue.length) {
+    const fish = cinematicQueue.shift();
+    // Drop fish that got removed (day reset, destroyed) before their turn.
+    if (!fishById.has(fish.id)) continue;
+    if (!fish.loaded) {
+      // Not loaded yet — put it back and wait for load to retry.
+      cinematicQueue.unshift(fish);
+      fish.img.addEventListener('load', scheduleCinematicAdvance, { once: true });
+      return;
+    }
+    fish.cinematicPending = false;
+    fish.phaseStart = performance.now();
+    lastCinematicStartAt = fish.phaseStart;
+    cinematicBegin(fish);
+    if (cinematicQueue.length) scheduleCinematicAdvance();
+    return;
+  }
+}
+
 // ---------- Ambient bubble stream ----------
 function spawnBubble() {
   if (!bubblesLayer) return;
@@ -730,16 +1015,20 @@ function spawnBubble() {
   setTimeout(() => b.remove(), dur * 1000 + 200);
 }
 // Prime the screen with a few, then maintain a steady stream.
-for (let i = 0; i < 6; i++) {
+// Reduced motion: fewer, slower bubbles so the scene still breathes.
+const AMBIENT_BUBBLE_INTERVAL_MS = REDUCE_MOTION ? 3200 : 900;
+const AMBIENT_BUBBLE_PRIME = REDUCE_MOTION ? 2 : 6;
+for (let i = 0; i < AMBIENT_BUBBLE_PRIME; i++) {
   setTimeout(spawnBubble, i * 400 + Math.random() * 800);
 }
-setInterval(spawnBubble, 900);
+setInterval(spawnBubble, AMBIENT_BUBBLE_INTERVAL_MS);
 
 // ---------- animation loop ----------
 let lastFrame = performance.now();
 function tick(now) {
   const dt = Math.min(64, now - lastFrame);
   lastFrame = now;
+  if (caustics) caustics.render(now);
   for (const fish of fishById.values()) fish.update(dt, now);
   requestAnimationFrame(tick);
 }
@@ -765,14 +1054,21 @@ async function poll() {
       serverIds.add(meta.id);
       if (fishById.has(meta.id)) continue;
       const fish = new Fish(meta);
-      if (firstLoad) {
-        const drop = () => fish.startAsSchool();
+      if (firstLoad || REDUCE_MOTION) {
+        // Reduced motion: skip the featured/splash cinematic and drop new
+        // fish straight into the school. Announce with a gentle name-tag fade.
+        const drop = () => {
+          fish.startAsSchool();
+          if (!firstLoad && fish.nameTag) {
+            fish.nameShowUntil = performance.now() + NAME_SHOW_MS;
+          }
+        };
         if (fish.loaded) drop();
         else fish.img.addEventListener('load', drop, { once: true });
       } else {
-        const kick = () => cinematicBegin(fish);
-        if (fish.loaded) kick();
-        else fish.img.addEventListener('load', kick, { once: true });
+        // Multiple iPads can submit simultaneously — queue arrivals so each
+        // fish gets its own cinematic moment instead of colliding.
+        cinematicRequest(fish);
       }
       fishById.set(meta.id, fish);
     }
@@ -812,6 +1108,7 @@ if (resetBtn) {
 }
 
 window.addEventListener('resize', () => {
+  if (caustics) caustics.resize();
   const W = window.innerWidth, H = window.innerHeight;
   for (const f of fishById.values()) {
     if (f.mode !== 'school') continue;

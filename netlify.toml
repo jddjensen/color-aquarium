@@ -1,2 +1,50 @@
 [build]
   publish = "public"
+  functions = "netlify/functions"
+
+# Clean URLs: /color → public/color.html, /aquarium → public/aquarium.html
+# (publish dir auto-serves index.html for "/")
+[[redirects]]
+  from = "/color"
+  to = "/color.html"
+  status = 200
+
+[[redirects]]
+  from = "/aquarium"
+  to = "/aquarium.html"
+  status = 200
+
+# API + blob image routes are handled by serverless functions.
+# Functions also declare `config.path` so these redirects are belt-and-suspenders.
+[[redirects]]
+  from = "/api/submit"
+  to = "/.netlify/functions/submit"
+  status = 200
+
+[[redirects]]
+  from = "/api/fish"
+  to = "/.netlify/functions/fish"
+  status = 200
+
+[[redirects]]
+  from = "/api/reset"
+  to = "/.netlify/functions/reset"
+  status = 200
+
+[[redirects]]
+  from = "/submissions/*"
+  to = "/.netlify/functions/submissions"
+  status = 200
+
+[functions]
+  node_bundler = "esbuild"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=2592000, immutable"
+
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "no-store"

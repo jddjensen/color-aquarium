@@ -428,6 +428,10 @@ function hideLookUpBanner() {
 }
 
 function swimAway(dataUrl) {
+  // Honor reduced-motion by skipping the large swim-off animation.
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    return new Promise((r) => setTimeout(r, 300));
+  }
   return new Promise((resolve) => {
     const rect = canvas.getBoundingClientRect();
     const link = document.querySelector('.topbar a');

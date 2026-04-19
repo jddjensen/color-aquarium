@@ -1,0 +1,13 @@
+{
+  "name": "coloring-fish",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Kids color fish on a podium iPad; their art swims onto a TV aquarium.",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}

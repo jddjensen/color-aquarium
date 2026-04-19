@@ -211,8 +211,38 @@ body.aquarium {
   position: fixed; inset: 0;
   background: url('/assets/Background.png') center/cover no-repeat;
   overflow: hidden;
-  transition: transform 1.4s cubic-bezier(.22,.8,.32,1);
-  will-change: transform;
+  transition: transform 1.4s cubic-bezier(.22,.8,.32,1), filter 90s linear;
+  will-change: transform, filter;
+  filter: var(--tint, none);
+}
+
+#caustics {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  border-radius: 0;
+  cursor: default;
+  touch-action: auto;
+  pointer-events: none;
+  z-index: 1;
+  opacity: .9;
+  mix-blend-mode: screen;
+}
+
+#caustics.caustics-fallback {
+  background:
+    radial-gradient(circle at 20% 15%, rgba(255,255,255,.18), rgba(255,255,255,0) 35%),
+    repeating-linear-gradient(
+      16deg,
+      rgba(255,255,255,0) 0px,
+      rgba(255,255,255,0) 85px,
+      rgba(190,235,255,.10) 118px,
+      rgba(255,255,255,0) 155px
+    );
+  opacity: .55;
 }
 
 /* Cinematic dim overlay (radial cut-out around splash point) */
@@ -267,36 +297,6 @@ body.aquarium {
 
 /* Featured fish floats above the dim layer */
 .fish-sprite.featured-mode { z-index: 17 !important; filter: drop-shadow(0 10px 20px rgba(0,0,0,.55)); }
-
-/* Animated light rays / caustics */
-.light-rays {
-  position: fixed; inset: 0;
-  pointer-events: none;
-  z-index: 2;
-  background:
-    repeating-linear-gradient(
-      18deg,
-      rgba(255,255,255,0) 0px,
-      rgba(255,255,255,0) 90px,
-      rgba(190,235,255,0.10) 120px,
-      rgba(255,255,255,0) 160px
-    ),
-    repeating-linear-gradient(
-      -24deg,
-      rgba(255,255,255,0) 0px,
-      rgba(255,255,255,0) 220px,
-      rgba(160,220,255,0.05) 260px,
-      rgba(255,255,255,0) 320px
-    );
-  mix-blend-mode: screen;
-  animation: rayDrift 22s linear infinite;
-  opacity: .85;
-}
-@keyframes rayDrift {
-  0%   { background-position: 0 0, 0 0; filter: brightness(1); }
-  50%  { filter: brightness(1.15); }
-  100% { background-position: 600px -300px, -400px 200px; filter: brightness(1); }
-}
 
 /* Rising bubble particles */
 .bubbles {
@@ -389,6 +389,19 @@ body.aquarium {
   will-change: transform;
   pointer-events: none;
   filter: drop-shadow(0 6px 12px rgba(0,0,0,.35));
+}
+.fish-shadow {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  pointer-events: none;
+  z-index: 1;
+  transform-origin: 50% 100%;
+  will-change: transform, opacity, filter;
+  mix-blend-mode: multiply;
+  filter: brightness(0) saturate(0) blur(8px);
+  opacity: .18;
 }
 /* Depth tiers — far fish feel faded / smaller via a wrapper class */
 .fish-sprite.depth-far {
@@ -518,4 +531,32 @@ body.aquarium {
   padding: 4px 10px; border-radius: 999px; font-weight: 800;
   font-size: .9rem; white-space: nowrap;
   box-shadow: 0 4px 10px rgba(0,0,0,.3);
+}
+
+/* ---------- Reduced-motion overrides ----------
+   Skip splashes, stop sways, slow bubbles, and drop cinematic transitions.
+   JS also branches on prefers-reduced-motion to route new fish straight into
+   the school and to skip camera zoom + bubble emission. */
+@media (prefers-reduced-motion: reduce) {
+  /* Disable decorative loops */
+  .seaweed { animation: none !important; transform: rotate(0deg) !important; }
+  .look-up-banner .arrow { animation: none !important; }
+
+  /* Bubbles: keep but slow way down so they feel ambient, not active */
+  .bubble { animation-duration: 28s !important; opacity: .45; }
+
+  /* Kill zoom / slide / scale transitions on the scene and overlays */
+  #aquarium { transition: filter 120s linear !important; transform: none !important; }
+  .tv-dim, .tv-banner, .look-up-banner, .swim-away, .fish-name {
+    transition: opacity .25s ease !important;
+  }
+  .tv-banner.show { transform: translate(-50%, 0) !important; }
+  .look-up-banner.show { transform: translate(-50%, -50%) scale(1) !important; }
+
+  /* Hide multi-ring splash — JS also skips the featured splash phase */
+  .splash { display: none !important; }
+
+  /* Swim-off becomes a simple fade */
+  .swim-away { transition: opacity .35s ease !important; }
+  .swim-away.go { transform: none !important; }
 }

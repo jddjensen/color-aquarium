@@ -1,0 +1,23 @@
+# Python dev server artifacts
+__pycache__/
+*.pyc
+*.pyo
+
+# Local submission storage (only used by the Python dev server;
+# production uses Netlify Blobs and never writes to disk).
+submissions/
+
+# Netlify + Node.js
+node_modules/
+.netlify/
+
+# Editor/OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Secrets
+.env
+.env.*
+!.env.example
