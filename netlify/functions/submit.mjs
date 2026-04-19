@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 
 // POST /api/submit  — body: { image: "data:image/png;base64,...", name?, species? }
 // Saves the PNG to the "fish" blob store under key `${day}/${id}.png`
-// and a JSON sidecar at `${day}/${id}.json` containing { name, species, createdAt }.
+// and a JSON sidecar at `${day}/${id}.json` containing { name, species, bio, createdAt }.
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
 
@@ -28,15 +28,16 @@ export default async (req) => {
     return jsonResponse(413, { error: "too large" });
   }
 
-  const name = typeof payload.name === "string" ? payload.name.trim().slice(0, 24) : "";
+  const name = typeof payload.name === "string" ? sanitizeName(payload.name) : "";
   const species = typeof payload.species === "string" ? payload.species.trim().slice(0, 24) : "";
+  const bio = typeof payload.bio === "string" ? sanitizeBio(payload.bio) : "";
   const day = todayKey();
   const id = randomBytes(8).toString("hex");
   const createdAt = Date.now();
 
   const store = getStore({ name: "fish", consistency: "strong" });
   await store.set(`${day}/${id}.png`, buf);
-  await store.setJSON(`${day}/${id}.json`, { name, species, createdAt });
+  await store.setJSON(`${day}/${id}.json`, { name, species, bio, createdAt });
 
   return jsonResponse(200, {
     id,
@@ -44,6 +45,7 @@ export default async (req) => {
     day,
     name,
     species,
+    bio,
   });
 };
 
@@ -62,6 +64,18 @@ function jsonResponse(status, body) {
     status,
     headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
   });
+}
+
+function normalizeSpace(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function sanitizeName(value) {
+  return normalizeSpace(value).replace(/[^A-Za-z0-9 '\-]/g, "").slice(0, 20).trim();
+}
+
+function sanitizeBio(value) {
+  return normalizeSpace(value).slice(0, 120);
 }
 
 export const config = { path: "/api/submit" };

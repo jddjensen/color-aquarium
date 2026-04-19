@@ -424,7 +424,6 @@ body.aquarium {
     0 16px 50px rgba(0,0,0,.55),
     inset 0 -3px 0 rgba(180,100,0,.3),
     0 0 0 4px rgba(255,255,255,.7);
-  white-space: nowrap;
   opacity: 0;
   z-index: 18;
   pointer-events: none;
@@ -432,12 +431,34 @@ body.aquarium {
   font-family: 'Comic Sans MS', 'Chalkboard SE', system-ui, sans-serif;
   max-width: 92vw;
   overflow: hidden;
-  text-overflow: ellipsis;
   text-shadow: 0 1px 0 rgba(255,255,255,.4);
+  display: flex;
+  flex-direction: column;
+  gap: .22rem;
+  align-items: center;
 }
 .tv-banner.show {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+.tv-banner-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.tv-banner-sub {
+  display: block;
+  font-size: .52em;
+  line-height: 1.2;
+  font-weight: 700;
+  opacity: .86;
+  max-width: 46ch;
+  white-space: normal;
+  text-wrap: balance;
+}
+.tv-banner.has-subtitle {
+  border-radius: 32px;
 }
 
 /* Featured fish floats above the dim layer */

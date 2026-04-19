@@ -293,6 +293,7 @@ class Fish {
     this.url = meta.url;
     this.createdAt = meta.createdAt;
     this.name = (meta.name || '').trim();
+    this.bio = (meta.bio || '').trim();
     this.species = (meta.species || '').toLowerCase();
     this.traits = SPECIES_TRAITS[this.species] || DEFAULT_TRAITS;
     this.locomotion = this.traits.locomotion;
@@ -1419,6 +1420,12 @@ document.body.appendChild(cinematicDim);
 
 const cinematicBanner = document.createElement('div');
 cinematicBanner.className = 'tv-banner';
+const cinematicBannerTitle = document.createElement('div');
+cinematicBannerTitle.className = 'tv-banner-title';
+const cinematicBannerSub = document.createElement('div');
+cinematicBannerSub.className = 'tv-banner-sub';
+cinematicBanner.appendChild(cinematicBannerTitle);
+cinematicBanner.appendChild(cinematicBannerSub);
 document.body.appendChild(cinematicBanner);
 
 const cinematicState = {
@@ -1431,6 +1438,14 @@ function cinematicLabel(fish) {
   const name = (fish.name || '').trim();
   if (name) return `✨  ${name} has joined the tank!  ✨`;
   return `✨  A new fish has joined the tank!  ✨`;
+}
+
+function cinematicBannerData(fish) {
+  const name = (fish.name || '').trim();
+  return {
+    title: name ? `${name} has joined the tank!` : 'A new fish has joined the tank!',
+    subtitle: (fish.bio || '').trim(),
+  };
 }
 
 function cinematicBegin(fish) {
@@ -1451,7 +1466,11 @@ function cinematicBegin(fish) {
 
   // Banner belongs to the most recent fish.
   cinematicState.bannerFish = fish;
-  cinematicBanner.textContent = cinematicLabel(fish);
+  const label = cinematicBannerData(fish);
+  cinematicBannerTitle.textContent = `✨  ${label.title}  ✨`;
+  cinematicBannerSub.textContent = label.subtitle;
+  cinematicBannerSub.hidden = !label.subtitle;
+  cinematicBanner.classList.toggle('has-subtitle', Boolean(label.subtitle));
   requestAnimationFrame(() => cinematicBanner.classList.add('show'));
 
   // Release camera + dim after the splash/hold window, independent of banner.

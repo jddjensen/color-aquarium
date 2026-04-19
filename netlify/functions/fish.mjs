@@ -31,13 +31,14 @@ export default async () => {
     [...byId.values()]
       .filter((e) => e.hasPng)
       .map(async (e) => {
-        let name = "", species = "", createdAt = 0;
+        let name = "", species = "", bio = "", createdAt = 0;
         if (e.hasJson) {
           try {
             const meta = await store.get(`${day}/${e.id}.json`, { type: "json" });
             if (meta) {
               name = (meta.name || "").trim();
               species = (meta.species || "").trim();
+              bio = (meta.bio || "").trim();
               createdAt = Number(meta.createdAt) || 0;
             }
           } catch {}
@@ -48,6 +49,7 @@ export default async () => {
           createdAt,
           name,
           species,
+          bio,
         };
       })
   );

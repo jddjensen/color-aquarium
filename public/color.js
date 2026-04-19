@@ -38,6 +38,11 @@ const PALETTE = [
   '#000000', '#666666', '#c0c0c0', '#ffffff',
 ];
 
+const HF_TRANSFORMERS_JS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm';
+const RMBG_MODEL_ID = 'briaai/RMBG-1.4';
+const ENHANCER_LOAD_TIMEOUT_MS = 15000;
+const ENHANCER_RUN_TIMEOUT_MS = 12000;
+
 // Pixels this dark (sum of rgb) on the line art are treated as "line" (fill barrier).
 const LINE_THRESHOLD = 360; // ~ < 120 per channel average
 // Pixels this bright on composite count as unpainted white paper when exporting.
@@ -246,6 +251,8 @@ const stickerImages = new Map();
 let currentSticker = null;
 let stickerPreview = null;
 const STICKER_CANVAS_SIZE = 120; // size in canvas px when placed
+let backgroundRemovalPipelinePromise = null;
+let backgroundRemovalUnavailable = false;
 
 // ---------- Fish-select screen ----------
 FISH.forEach((f) => {
@@ -283,6 +290,7 @@ function enterColoringView(fish) {
     coloringViewEl.classList.add('entering');
     requestAnimationFrame(() => coloringViewEl.classList.remove('entering'));
     loadFish(fish);
+    scheduleBackgroundRemovalWarmup();
   }, 350);
 }
 
@@ -316,6 +324,175 @@ function anyPaintApplied() {
     return false;
   } catch {
     return false;
+  }
+}
+
+function scheduleBackgroundRemovalWarmup() {
+  const warm = () => { void getBackgroundRemovalPipeline(); };
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(warm, { timeout: 1800 });
+  } else {
+    setTimeout(warm, 400);
+  }
+}
+
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+async function getBackgroundRemovalPipeline() {
+  if (backgroundRemovalUnavailable) return null;
+  if (!backgroundRemovalPipelinePromise) {
+    backgroundRemovalPipelinePromise = (async () => {
+      const { pipeline } = await import(HF_TRANSFORMERS_JS_URL);
+      const options = navigator.gpu ? { device: 'webgpu' } : {};
+      return pipeline('background-removal', RMBG_MODEL_ID, options);
+    })().catch((error) => {
+      backgroundRemovalUnavailable = true;
+      backgroundRemovalPipelinePromise = null;
+      console.warn('background removal unavailable', error);
+      return null;
+    });
+  }
+  return backgroundRemovalPipelinePromise;
+}
+
+function dataUrlToBlob(dataUrl) {
+  const [header, body = ''] = dataUrl.split(',', 2);
+  const mime = (header.match(/^data:(.*?);base64$/) || [])[1] || 'image/png';
+  const binary = atob(body);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function resizeDataUrl(dataUrl, maxEdge) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const width = img.naturalWidth || img.width;
+      const height = img.naturalHeight || img.height;
+      const scale = Math.min(1, maxEdge / Math.max(width, height));
+      const out = document.createElement('canvas');
+      out.width = Math.max(1, Math.round(width * scale));
+      out.height = Math.max(1, Math.round(height * scale));
+      const outCtx = out.getContext('2d');
+      outCtx.drawImage(img, 0, 0, out.width, out.height);
+      resolve(out.toDataURL('image/png'));
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+function rawImageToDataUrl(rawImage) {
+  const rgba = rawImage.clone().rgba();
+  const out = document.createElement('canvas');
+  out.width = rgba.width;
+  out.height = rgba.height;
+  const outCtx = out.getContext('2d');
+  const imgData = new ImageData(new Uint8ClampedArray(rgba.data), rgba.width, rgba.height);
+  outCtx.putImageData(imgData, 0, 0);
+  return out.toDataURL('image/png');
+}
+
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+async function alphaCoverage(dataUrl) {
+  const img = await loadImageFromDataUrl(dataUrl);
+  const probe = document.createElement('canvas');
+  probe.width = img.naturalWidth || img.width;
+  probe.height = img.naturalHeight || img.height;
+  const probeCtx = probe.getContext('2d', { willReadFrequently: true });
+  probeCtx.drawImage(img, 0, 0);
+  const pixels = probeCtx.getImageData(0, 0, probe.width, probe.height).data;
+  let opaque = 0;
+  for (let i = 3; i < pixels.length; i += 4) {
+    if (pixels[i] > 8) opaque++;
+  }
+  return opaque;
+}
+
+async function enhanceFishArtwork(dataUrl) {
+  if (backgroundRemovalUnavailable) return dataUrl;
+  try {
+    const remover = await withTimeout(getBackgroundRemovalPipeline(), ENHANCER_LOAD_TIMEOUT_MS, 'background removal load');
+    if (!remover) return dataUrl;
+    const output = await withTimeout(remover(dataUrlToBlob(dataUrl)), ENHANCER_RUN_TIMEOUT_MS, 'background removal');
+    const raw = Array.isArray(output) ? output[0] : output;
+    if (!raw) return dataUrl;
+    const refined = rawImageToDataUrl(raw);
+
+    // If the inferred matte strips out too much of the drawing, prefer the
+    // original export rather than sending a barely-visible fish to the tank.
+    const [baseCoverage, refinedCoverage] = await Promise.all([
+      alphaCoverage(dataUrl),
+      alphaCoverage(refined),
+    ]);
+    if (refinedCoverage < baseCoverage * 0.45) return dataUrl;
+    return refined;
+  } catch (error) {
+    console.warn('background removal failed', error);
+    return dataUrl;
+  }
+}
+
+function sanitizeSuggestedName(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[^A-Za-z0-9 '\-]/g, '')
+    .slice(0, 20);
+}
+
+function sanitizeBio(value) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120);
+}
+
+async function describeFishArt(dataUrl, fish, userName) {
+  try {
+    const previewDataUrl = await resizeDataUrl(dataUrl, 384);
+    const r = await fetch('/api/describe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: previewDataUrl,
+        species: fish.id,
+        speciesLabel: fish.label,
+        name: userName,
+      }),
+    });
+    if (!r.ok) throw new Error('describe failed');
+    const data = await r.json();
+    return {
+      nameSuggestion: sanitizeSuggestedName(data.nameSuggestion || ''),
+      bio: sanitizeBio(data.bio || ''),
+    };
+  } catch (error) {
+    console.warn('fish description failed', error);
+    return { nameSuggestion: '', bio: '' };
   }
 }
 
@@ -809,15 +986,36 @@ async function submit() {
   const fishName = (nameInput?.value || '').trim().slice(0, 20);
   btn.disabled = true;
   const original = btn.textContent;
-  btn.textContent = 'Swimming away...';
+  btn.textContent = 'Polishing scales...';
   try {
-    const dataUrl = exportFishPng();
+    const rawDataUrl = exportFishPng();
+    const [enhancedResult, describeResult] = await Promise.allSettled([
+      enhanceFishArtwork(rawDataUrl),
+      describeFishArt(rawDataUrl, currentFish, fishName),
+    ]);
+    const dataUrl = enhancedResult.status === 'fulfilled' && enhancedResult.value
+      ? enhancedResult.value
+      : rawDataUrl;
+    const describe = describeResult.status === 'fulfilled' && describeResult.value
+      ? describeResult.value
+      : { nameSuggestion: '', bio: '' };
+    const savedName = fishName || describe.nameSuggestion || '';
+    const savedBio = describe.bio || '';
+
+    btn.textContent = 'Swimming away...';
     const r = await fetch('/api/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image: dataUrl, name: fishName, species: currentFish.id }),
+      body: JSON.stringify({
+        image: dataUrl,
+        name: savedName,
+        species: currentFish.id,
+        bio: savedBio,
+      }),
     });
     if (!r.ok) throw new Error('submit failed');
+    const saved = await r.json();
+    const finalName = (saved.name || savedName || '').trim();
 
     // Kick off the swim-off animation and the "Look up!" banner in parallel.
     // The TV polls every ~1.2s and then runs a ~650ms cinematic ramp, so the
@@ -830,8 +1028,8 @@ async function submit() {
     await wait(1400);
     hideLookUpBanner();
 
-    toast(fishName
-      ? `${fishName} is swimming in the aquarium!`
+    toast(finalName
+      ? `${finalName} is swimming in the aquarium!`
       : 'Your fish is swimming in the aquarium!');
 
     // New flow: once the fish is on its way, hand the iPad to the next guest

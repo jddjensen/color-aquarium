@@ -11,6 +11,7 @@ Serves:
 
 API:
   POST /api/submit   body: {"image": "data:image/png;base64,..."}  -> {id, url, day}
+  POST /api/describe body: {"image": "data:image/png;base64,...", "species": "...", "name": "..."} -> {nameSuggestion, bio}
   GET  /api/fish     -> {day, fish: [{id, url, createdAt}]}
 
 No external dependencies. Run with:  python server.py
@@ -26,12 +27,27 @@ import shutil
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PUBLIC = os.path.join(ROOT, "public")
 SUBMISSIONS = os.path.join(ROOT, "submissions")
 PORT = int(os.environ.get("PORT", "3000"))
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
+SPECIES_LABELS = {
+    "fish1": "Goldie",
+    "fish2": "Angel",
+    "fish3": "Clown",
+    "fish4": "Blue Tang",
+    "fish5": "Tropical Fish",
+    "puffer1": "Puffer",
+    "seahorse1": "Seahorse",
+    "eel1": "Eel",
+    "stingray1": "Sting Ray",
+    "seaslug1": "Sea Slug",
+    "shark1": "Shark",
+}
 
 os.makedirs(SUBMISSIONS, exist_ok=True)
 mimetypes.add_type("application/javascript", ".js")
@@ -43,6 +59,128 @@ def today_key() -> str:
 
 def day_dir(key: str) -> str:
     return os.path.join(SUBMISSIONS, key)
+
+
+def normalize_space(value: str) -> str:
+    return " ".join((value or "").split())
+
+
+def sanitize_name(value: str) -> str:
+    cleaned = normalize_space(value)
+    cleaned = "".join(ch for ch in cleaned if ch.isalnum() or ch in " '-")
+    return cleaned[:20].strip()
+
+
+def sanitize_bio(value: str) -> str:
+    return normalize_space(value)[:120].strip()
+
+
+def stable_pick(seed_text: str, options):
+    if not options:
+        return ""
+    seed = sum(ord(ch) for ch in (seed_text or ""))
+    return options[seed % len(options)]
+
+
+def fallback_description(species: str, raw_name: str, seed_text: str = ""):
+    species_label = SPECIES_LABELS.get(species, "Fish")
+    seed = seed_text or species_label
+    starters = ["Bubbles", "Coral", "Sunny", "Ripple", "Pebble", "Comet", "Marble", "Splash"]
+    endings = ["Star", "Dash", "Glow", "Flip", "Scout", "Skipper", "Spark", "Drift"]
+    bio_templates = [
+        "A cheerful {species} who loves showing off bright colors in the reef.",
+        "A gentle {species} with a talent for dramatic aquarium entrances.",
+        "A curious {species} who patrols the tank like a tiny explorer.",
+        "A playful {species} who swims like it already knows the spotlight.",
+    ]
+
+    name_suggestion = ""
+    if raw_name:
+        final_name = sanitize_name(raw_name)
+    else:
+        final_name = sanitize_name(f"{stable_pick(seed, starters)} {stable_pick(seed[::-1], endings)}")
+        name_suggestion = final_name
+
+    bio = sanitize_bio(stable_pick(seed + species_label, bio_templates).format(species=species_label.lower()))
+    return {"nameSuggestion": name_suggestion, "bio": bio}
+
+
+def parse_json_object(text: str):
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        return json.loads(text[start:end + 1])
+    except Exception:
+        return None
+
+
+def hf_describe_fish(image_data_url: str, species: str, raw_name: str):
+    token = os.environ.get("HF_TOKEN")
+    if not token:
+        return None
+
+    species_label = SPECIES_LABELS.get(species, species or "Fish")
+    model_candidates = []
+    preferred = os.environ.get("HF_VISION_MODEL", "").strip()
+    if preferred:
+        model_candidates.append(preferred)
+    model_candidates.extend([
+        "HuggingFaceTB/SmolVLM-256M-Instruct",
+        "Qwen/Qwen2.5-VL-3B-Instruct",
+    ])
+
+    prompt = (
+        "You write short, delightful aquarium placards for a children's coloring exhibit. "
+        "Return strict JSON only with keys nameSuggestion and bio. "
+        "If the child already supplied a name, leave nameSuggestion empty and write only the bio. "
+        "Keep the bio to one sentence under 100 characters. "
+        "Keep any suggested name to 1-2 words under 20 characters. "
+        f"Species hint: {species_label}. Child name: {raw_name or 'none'}."
+    )
+
+    seen = set()
+    for model in model_candidates:
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        body = {
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ],
+            }],
+            "temperature": 0.4,
+            "max_tokens": 140,
+        }
+        req = Request(
+            "https://router.huggingface.co/v1/chat/completions",
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(req, timeout=10) as res:
+                payload = json.loads(res.read().decode("utf-8"))
+            text = (((payload.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
+            parsed = parse_json_object(text)
+            if not isinstance(parsed, dict):
+                continue
+            return {
+                "nameSuggestion": sanitize_name(parsed.get("nameSuggestion") or ""),
+                "bio": sanitize_bio(parsed.get("bio") or ""),
+            }
+        except Exception as e:
+            print("hf describe failed:", model, e)
+            continue
+    return None
 
 
 def read_fish_for_day(key: str):
@@ -58,6 +196,7 @@ def read_fish_for_day(key: str):
         fish_id = name[:-4]
         fish_name = ""
         species = ""
+        bio = ""
         meta_path = os.path.join(d, fish_id + ".json")
         if os.path.isfile(meta_path):
             try:
@@ -65,6 +204,7 @@ def read_fish_for_day(key: str):
                     meta = json.load(f)
                 fish_name = (meta.get("name") or "").strip()
                 species = (meta.get("species") or "").strip()
+                bio = (meta.get("bio") or "").strip()
             except Exception:
                 pass
         out.append({
@@ -73,6 +213,7 @@ def read_fish_for_day(key: str):
             "createdAt": int(st.st_mtime * 1000),
             "name": fish_name,
             "species": species,
+            "bio": bio,
         })
     out.sort(key=lambda f: f["createdAt"])
     return out
@@ -189,6 +330,31 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/reset":
             reset_today()
             return self._send_json(200, {"ok": True, "day": today_key()})
+        if parsed.path == "/api/describe":
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > MAX_UPLOAD_BYTES:
+                return self._send_json(413, {"error": "too large"})
+
+            raw = self.rfile.read(length)
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except Exception:
+                return self._send_json(400, {"error": "invalid json"})
+
+            image = payload.get("image") if isinstance(payload, dict) else None
+            prefix = "data:image/png;base64,"
+            if not isinstance(image, str) or not image.startswith(prefix):
+                return self._send_json(400, {"error": "invalid image"})
+
+            raw_name = payload.get("name") if isinstance(payload, dict) else None
+            fish_name = sanitize_name(raw_name) if isinstance(raw_name, str) else ""
+            raw_species = payload.get("species") if isinstance(payload, dict) else None
+            species = normalize_space(raw_species)[:24] if isinstance(raw_species, str) else ""
+
+            described = hf_describe_fish(image, species, fish_name) or fallback_description(species, fish_name, image[-256:])
+            if fish_name:
+                described["nameSuggestion"] = ""
+            return self._send_json(200, described)
         if parsed.path != "/api/submit":
             return self.send_error(404, "Not found")
 
@@ -216,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
 
         raw_name = payload.get("name") if isinstance(payload, dict) else None
         if isinstance(raw_name, str):
-            fish_name = raw_name.strip()[:24]
+            fish_name = sanitize_name(raw_name)
         else:
             fish_name = ""
 
@@ -225,6 +391,11 @@ class Handler(BaseHTTPRequestHandler):
             species = raw_species.strip()[:24]
         else:
             species = ""
+        raw_bio = payload.get("bio") if isinstance(payload, dict) else None
+        if isinstance(raw_bio, str):
+            bio = sanitize_bio(raw_bio)
+        else:
+            bio = ""
 
         key = today_key()
         d = day_dir(key)
@@ -232,9 +403,9 @@ class Handler(BaseHTTPRequestHandler):
         fish_id = secrets.token_hex(8)
         with open(os.path.join(d, fish_id + ".png"), "wb") as f:
             f.write(buf)
-        if fish_name or species:
+        if fish_name or species or bio:
             with open(os.path.join(d, fish_id + ".json"), "w", encoding="utf-8") as f:
-                json.dump({"name": fish_name, "species": species}, f)
+                json.dump({"name": fish_name, "species": species, "bio": bio}, f)
 
         return self._send_json(200, {
             "id": fish_id,
@@ -242,6 +413,7 @@ class Handler(BaseHTTPRequestHandler):
             "day": key,
             "name": fish_name,
             "species": species,
+            "bio": bio,
         })
 
     # Quieter console
