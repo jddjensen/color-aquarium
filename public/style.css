@@ -1,0 +1,419 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; font-family: 'Comic Sans MS', 'Chalkboard SE', system-ui, sans-serif; }
+body { background: #eaf7ff; color: #113; }
+
+/* ---------- Landing ---------- */
+body.landing {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(180deg, #7ac6ff 0%, #0a3d62 100%);
+  color: white;
+}
+.landing-inner { text-align: center; padding: 2rem; }
+.landing-inner h1 { font-size: clamp(2.5rem, 7vw, 5rem); margin: 0; text-shadow: 0 4px 0 rgba(0,0,0,.2); }
+.landing-inner p { font-size: 1.4rem; opacity: .95; }
+.landing-buttons { display: flex; gap: 1.25rem; justify-content: center; flex-wrap: wrap; margin-top: 2rem; }
+.big-btn {
+  display: inline-block;
+  padding: 1rem 2rem;
+  border-radius: 999px;
+  background: white;
+  color: #0a3d62;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 1.3rem;
+  box-shadow: 0 6px 0 rgba(0,0,0,.15);
+  transition: transform .1s ease;
+}
+.big-btn:hover { transform: translateY(-2px); }
+.big-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0,0,0,.15); }
+.big-btn.primary { background: #ffd34e; }
+
+/* ---------- Color page ---------- */
+body.color {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #cdeffd, #a3d9f5);
+  display: flex;
+  flex-direction: column;
+}
+.topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .75rem 1rem;
+  background: #0a3d62; color: white;
+}
+.topbar h1 { margin: 0; font-size: 1.25rem; }
+.topbar a { color: #ffd34e; text-decoration: none; font-weight: 700; }
+
+.picker { display: flex; gap: .5rem; padding: .75rem 1rem; overflow-x: auto; background: rgba(255,255,255,.6); }
+.picker button {
+  border: 3px solid transparent;
+  background: white;
+  border-radius: 14px;
+  padding: 6px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.picker button.active { border-color: #ff7a59; }
+.picker img { height: 72px; display: block; pointer-events: none; }
+
+.workspace {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  gap: 1rem;
+  padding: 1rem;
+}
+@media (max-width: 800px) {
+  .workspace { grid-template-columns: 1fr; }
+}
+
+.canvas-wrap {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.1);
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  overflow: hidden;
+  min-height: 300px;
+}
+canvas { max-width: 100%; height: auto; display: block; touch-action: none; border-radius: 8px; cursor: crosshair; }
+
+.tools { display: flex; flex-direction: column; gap: .75rem; }
+.panel {
+  background: white;
+  border-radius: 14px;
+  padding: .75rem;
+  box-shadow: 0 6px 18px rgba(0,0,0,.08);
+}
+.panel h3 { margin: 0 0 .5rem; font-size: 1rem; color: #0a3d62; }
+
+.colors { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.swatch {
+  width: 100%; aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  border: 3px solid white;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.12);
+  cursor: pointer;
+}
+.swatch.active { box-shadow: 0 0 0 3px #ff7a59; transform: scale(1.05); }
+
+.tool-row { display: flex; gap: .5rem; flex-wrap: wrap; }
+.tool-btn {
+  flex: 1; padding: .6rem; border-radius: 10px; border: 2px solid #0a3d62; background: white; color: #0a3d62;
+  font-weight: 700; cursor: pointer; font-size: .95rem;
+}
+.tool-btn.active { background: #0a3d62; color: white; }
+.size-row input { width: 100%; }
+
+.actions { display: flex; flex-direction: column; gap: .5rem; }
+.actions button {
+  padding: .8rem 1rem; border-radius: 12px; border: none; font-size: 1.05rem; font-weight: 800; cursor: pointer;
+}
+.actions input[type="text"] {
+  padding: .7rem .9rem;
+  border-radius: 10px;
+  border: 2px solid #0a3d62;
+  font-family: inherit;
+  font-size: 1rem;
+  outline: none;
+  background: #fafdff;
+  color: #0a3d62;
+}
+.actions input[type="text"]:focus {
+  border-color: #ff7a59;
+  box-shadow: 0 0 0 3px rgba(255,122,89,.2);
+}
+
+/* Swim-off animation for the fish when submitted */
+.swim-away {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  transform-origin: 50% 50%;
+  filter: drop-shadow(0 8px 14px rgba(0,0,0,.25));
+  transition: transform 1.6s cubic-bezier(.55,.15,.4,.95), opacity .4s ease 1.3s;
+}
+.swim-away.go {
+  opacity: 0;
+}
+.btn-submit { background: #2bbf5a; color: white; box-shadow: 0 5px 0 #1d8a42; }
+.btn-submit:active { transform: translateY(2px); box-shadow: 0 2px 0 #1d8a42; }
+.btn-clear { background: #ffd34e; color: #5a3c00; }
+.btn-undo { background: #e0e7ff; color: #1e3a8a; }
+
+.toast {
+  position: fixed; left: 50%; top: 20px; transform: translateX(-50%);
+  background: #0a3d62; color: white; padding: .75rem 1.25rem; border-radius: 999px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.25);
+  opacity: 0; transition: opacity .3s ease;
+  pointer-events: none;
+  z-index: 100;
+}
+.toast.show { opacity: 1; }
+
+/* ---------- Aquarium page ---------- */
+body.aquarium {
+  margin: 0;
+  background: #001018;
+  overflow: hidden;
+  height: 100vh;
+}
+#aquarium {
+  position: fixed; inset: 0;
+  background: url('/assets/Background.png') center/cover no-repeat;
+  overflow: hidden;
+}
+
+/* Animated light rays / caustics */
+.light-rays {
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background:
+    repeating-linear-gradient(
+      18deg,
+      rgba(255,255,255,0) 0px,
+      rgba(255,255,255,0) 90px,
+      rgba(190,235,255,0.10) 120px,
+      rgba(255,255,255,0) 160px
+    ),
+    repeating-linear-gradient(
+      -24deg,
+      rgba(255,255,255,0) 0px,
+      rgba(255,255,255,0) 220px,
+      rgba(160,220,255,0.05) 260px,
+      rgba(255,255,255,0) 320px
+    );
+  mix-blend-mode: screen;
+  animation: rayDrift 22s linear infinite;
+  opacity: .85;
+}
+@keyframes rayDrift {
+  0%   { background-position: 0 0, 0 0; filter: brightness(1); }
+  50%  { filter: brightness(1.15); }
+  100% { background-position: 600px -300px, -400px 200px; filter: brightness(1); }
+}
+
+/* Rising bubble particles */
+.bubbles {
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  overflow: hidden;
+}
+.bubble {
+  position: absolute;
+  bottom: -60px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 30%, rgba(255,255,255,.95) 0%, rgba(220,240,255,.45) 35%, rgba(180,220,255,.15) 70%, rgba(180,220,255,0) 100%);
+  box-shadow: inset 0 0 4px rgba(255,255,255,.6);
+  border: 1px solid rgba(255,255,255,.35);
+  opacity: 0;
+  animation-name: bubbleRise;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  will-change: transform, opacity;
+}
+@keyframes bubbleRise {
+  0%   { transform: translate3d(0, 0, 0) scale(0.8); opacity: 0; }
+  8%   { opacity: .75; }
+  50%  { transform: translate3d(calc(var(--drift, 20px) * 0.5), -55vh, 0) scale(1); }
+  100% { transform: translate3d(var(--drift, 20px), -115vh, 0) scale(1.05); opacity: 0; }
+}
+
+/* Bubble emitted from a fish */
+.bubble-pop {
+  position: absolute;
+  top: 0; left: 0;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 30%, rgba(255,255,255,.95) 0%, rgba(220,240,255,.45) 40%, rgba(180,220,255,0) 90%);
+  border: 1px solid rgba(255,255,255,.4);
+  pointer-events: none;
+  z-index: 7;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+/* Foreground coral + seaweed */
+.coral-overlay {
+  position: fixed; left: 0; right: 0; bottom: 0;
+  height: 150px;
+  pointer-events: none;
+  z-index: 6;
+}
+.coral-overlay svg {
+  position: absolute; inset: 0;
+  display: block;
+}
+.seaweed {
+  position: absolute;
+  bottom: 2px;
+  width: 14px; height: 90px;
+  transform-origin: 50% 100%;
+  background: linear-gradient(180deg, rgba(14,60,30,.0) 0%, rgba(10,70,36,.85) 40%, rgba(4,30,18,1) 100%);
+  border-radius: 50% 50% 40% 40% / 60% 60% 40% 40%;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,.5));
+  animation: seaweedSway 5.5s ease-in-out infinite alternate;
+  opacity: .9;
+}
+.seaweed::before,
+.seaweed::after {
+  content: "";
+  position: absolute; bottom: 0;
+  border-radius: 50% 50% 40% 40% / 60% 60% 40% 40%;
+  background: inherit;
+}
+.seaweed::before { left: -12px; width: 10px; height: 70px; transform: rotate(-10deg); }
+.seaweed::after  { right: -12px; width: 10px; height: 76px; transform: rotate(10deg); }
+@keyframes seaweedSway {
+  0%   { transform: rotate(-6deg); }
+  100% { transform: rotate(6deg); }
+}
+.seaweed.sw1 { left: 6%;  height: 110px; animation-duration: 5.2s; }
+.seaweed.sw2 { left: 20%; height: 80px;  animation-duration: 6.1s; animation-delay: -1s; opacity: .8; }
+.seaweed.sw3 { left: 38%; height: 130px; animation-duration: 5.8s; animation-delay: -2s; }
+.seaweed.sw4 { left: 56%; height: 95px;  animation-duration: 6.4s; animation-delay: -0.5s; opacity: .85; }
+.seaweed.sw5 { left: 74%; height: 120px; animation-duration: 5.5s; animation-delay: -1.5s; }
+.seaweed.sw6 { left: 90%; height: 85px;  animation-duration: 6.0s; animation-delay: -2.3s; opacity: .8; }
+
+.fish-sprite {
+  position: absolute;
+  top: 0; left: 0;
+  will-change: transform;
+  pointer-events: none;
+  filter: drop-shadow(0 6px 12px rgba(0,0,0,.35));
+}
+/* Depth tiers — far fish feel faded / smaller via a wrapper class */
+.fish-sprite.depth-far {
+  filter: drop-shadow(0 4px 10px rgba(0,0,0,.4)) saturate(0.8) brightness(0.88) blur(0.3px);
+  opacity: .88;
+  z-index: 4;
+}
+.fish-sprite.depth-mid {
+  filter: drop-shadow(0 5px 11px rgba(0,0,0,.4)) saturate(0.92);
+  opacity: .95;
+  z-index: 5;
+}
+.fish-sprite.depth-near {
+  filter: drop-shadow(0 8px 16px rgba(0,0,0,.45));
+  z-index: 7;
+}
+
+/* Fish name tag */
+.fish-name {
+  position: absolute;
+  top: 0; left: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,.6), rgba(0,0,0,.4));
+  color: white;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-family: 'Comic Sans MS', 'Chalkboard SE', system-ui, sans-serif;
+  font-size: .85rem;
+  font-weight: 700;
+  pointer-events: none;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity .35s ease;
+  z-index: 8;
+  text-shadow: 0 1px 2px rgba(0,0,0,.6);
+  border: 1px solid rgba(255,255,255,.25);
+  box-shadow: 0 4px 10px rgba(0,0,0,.35);
+  transform: translate(-50%, -100%);
+}
+.fish-name.show { opacity: 1; }
+.fish-flip,
+.fish-pitch {
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 50%;
+  will-change: transform;
+}
+.fish-wiggle {
+  width: 100%;
+  height: 100%;
+  /* Origin at the head end (sprites face left): keeps the head steady while
+     the tail/fins sweep with the skew. */
+  transform-origin: 15% 50%;
+  will-change: transform;
+}
+.fish-sprite img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Splash ripple rings at the entry point */
+.splash {
+  position: absolute;
+  top: 0; left: 0;
+  width: 0; height: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.splash span {
+  position: absolute;
+  left: 0; top: 0;
+  width: 160px; height: 60px;
+  border: 3px solid rgba(255,255,255,.85);
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.2);
+  opacity: 0;
+  box-shadow: 0 0 24px rgba(255,255,255,.5), inset 0 0 12px rgba(180,230,255,.6);
+}
+.splash span:nth-child(2) { border-color: rgba(200,230,255,.75); }
+.splash span:nth-child(3) { border-color: rgba(160,210,245,.6); }
+
+/* Hidden reset hotspot in the bottom-right corner.
+   Invisible by default; only becomes dimly visible while hovered. */
+#resetHotspot {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  width: 56px;
+  height: 56px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: default;
+  opacity: 0;
+  transition: opacity .2s ease;
+  z-index: 20;
+}
+#resetHotspot:hover,
+#resetHotspot:focus-visible { opacity: .25; cursor: pointer; }
+#resetHotspot::after {
+  content: "\21bb";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: white;
+  font-size: 24px;
+}
+.aquarium-topbar {
+  position: fixed; top: 0; left: 0; right: 0;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: .6rem 1rem;
+  color: white;
+  background: linear-gradient(180deg, rgba(0,0,0,.45), rgba(0,0,0,0));
+  z-index: 10;
+  font-weight: 700;
+}
+.aquarium-topbar a { color: #ffd34e; text-decoration: none; }
+.badge-new {
+  position: absolute;
+  top: -36px; left: 50%;
+  transform: translateX(-50%);
+  background: #ffd34e; color: #5a3c00;
+  padding: 4px 10px; border-radius: 999px; font-weight: 800;
+  font-size: .9rem; white-space: nowrap;
+  box-shadow: 0 4px 10px rgba(0,0,0,.3);
+}

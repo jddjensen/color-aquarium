@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Virtual Aquarium</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="aquarium">
+  <div class="aquarium-topbar">
+    <span id="count">0 fish today</span>
+    <a href="/color">+ Add a fish</a>
+  </div>
+  <div id="aquarium"></div>
+  <div class="light-rays" aria-hidden="true"></div>
+  <div class="bubbles" id="bubbles" aria-hidden="true"></div>
+  <div class="coral-overlay" aria-hidden="true">
+    <svg viewBox="0 0 1600 140" preserveAspectRatio="none" width="100%" height="100%">
+      <defs>
+        <linearGradient id="coralGrad" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stop-color="#062233" stop-opacity="0.85"/>
+          <stop offset="100%" stop-color="#010a14" stop-opacity="1"/>
+        </linearGradient>
+      </defs>
+      <!-- far background silhouette -->
+      <path d="M0,140 L0,95 C60,80 90,100 130,88 C180,72 210,96 260,82 C310,68 350,90 400,78 C460,62 500,92 560,82 C620,72 660,96 720,86 C780,76 820,100 880,88 C940,76 980,98 1040,86 C1100,74 1140,100 1200,88 C1260,76 1300,100 1360,86 C1420,72 1460,96 1520,84 C1560,76 1580,88 1600,92 L1600,140 Z"
+            fill="url(#coralGrad)" opacity="0.9"/>
+    </svg>
+    <!-- swaying seaweed sprites -->
+    <div class="seaweed sw1"></div>
+    <div class="seaweed sw2"></div>
+    <div class="seaweed sw3"></div>
+    <div class="seaweed sw4"></div>
+    <div class="seaweed sw5"></div>
+    <div class="seaweed sw6"></div>
+  </div>
+  <button id="resetHotspot" type="button" aria-label="Reset aquarium" title=""></button>
+  <script src="/aquarium.js"></script>
+</body>
+</html>

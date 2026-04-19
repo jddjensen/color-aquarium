@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Color a Fish</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body class="color">
+  <div class="topbar">
+    <h1>Color Your Fish</h1>
+    <a href="/aquarium">See the Aquarium →</a>
+  </div>
+
+  <div class="picker" id="picker"></div>
+
+  <div class="workspace">
+    <div class="canvas-wrap">
+      <canvas id="canvas" width="900" height="600"></canvas>
+    </div>
+
+    <div class="tools">
+      <div class="panel">
+        <h3>Colors</h3>
+        <div class="colors" id="colors"></div>
+      </div>
+
+      <div class="panel">
+        <h3>Tool</h3>
+        <div class="tool-row">
+          <button class="tool-btn active" data-tool="brush">Brush</button>
+          <button class="tool-btn" data-tool="fill">Fill</button>
+          <button class="tool-btn" data-tool="eraser">Eraser</button>
+        </div>
+        <div class="size-row" style="margin-top:.6rem;">
+          <label>Brush size: <span id="sizeLabel">18</span></label>
+          <input type="range" id="size" min="4" max="60" value="18" />
+        </div>
+      </div>
+
+      <div class="panel actions">
+        <input type="text" id="fishName" placeholder="Name your fish (optional)" maxlength="20" />
+        <button class="btn-undo" id="undo">Undo</button>
+        <button class="btn-clear" id="clear">Start Over</button>
+        <button class="btn-submit" id="submit">Send to Aquarium</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/color.js"></script>
+</body>
+</html>
