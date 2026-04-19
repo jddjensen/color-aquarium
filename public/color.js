@@ -383,23 +383,48 @@ async function submit() {
     });
     if (!r.ok) throw new Error('submit failed');
 
-    // Animate the fish swimming off toward the "See the Aquarium" link.
-    await swimAway(dataUrl);
+    // Kick off the swim-off animation and the "Look up!" banner in parallel.
+    // The TV polls every ~1.2s and then runs a ~650ms cinematic ramp, so the
+    // splash on the TV lands roughly when the iPad animation completes.
+    const swim = swimAway(dataUrl);
+    showLookUpBanner();
+    await swim;
 
-    toast(fishName
-      ? `${fishName} is swimming in the aquarium!`
-      : 'Your fish is swimming in the aquarium!');
     paintCtx.clearRect(0, 0, paintCanvas.width, paintCanvas.height);
     if (nameInput) nameInput.value = '';
     undoStack.length = 0;
     render();
+
+    // Hold the banner a bit longer so guests' eyes reach the TV in time for the splash.
+    await wait(1400);
+    hideLookUpBanner();
+
+    toast(fishName
+      ? `${fishName} is swimming in the aquarium!`
+      : 'Your fish is swimming in the aquarium!');
   } catch (e) {
     console.error(e);
+    hideLookUpBanner();
     toast('Oops — could not send your fish. Try again!');
   } finally {
     btn.disabled = false;
     btn.textContent = original;
   }
+}
+
+function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function showLookUpBanner() {
+  const el = document.getElementById('lookUpBanner');
+  if (!el) return;
+  el.classList.add('show');
+  el.setAttribute('aria-hidden', 'false');
+}
+function hideLookUpBanner() {
+  const el = document.getElementById('lookUpBanner');
+  if (!el) return;
+  el.classList.remove('show');
+  el.setAttribute('aria-hidden', 'true');
 }
 
 function swimAway(dataUrl) {

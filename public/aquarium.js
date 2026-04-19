@@ -5,13 +5,16 @@ const bubblesLayer = document.getElementById('bubbles');
 /** @type {Map<string, Fish>} */
 const fishById = new Map();
 let currentDay = null;
-const POLL_MS = 3000;
+// Short polling — guests watch the podium→TV handoff, low latency sells the magic.
+const POLL_MS = 1200;
 
 // Splash-in timings (ms) for a brand-new fish
+const CINEMATIC_INTRO_MS = 650;   // camera/dim/banner ramp before fish appears
 const SPLASH_FALL_MS = 550;
 const SPLASH_BURST_MS = 650;
 const FEATURE_SWIM_MS = 8000;
-const FEATURE_TOTAL_MS = SPLASH_FALL_MS + SPLASH_BURST_MS + FEATURE_SWIM_MS;
+const CINEMATIC_HOLD_MS = CINEMATIC_INTRO_MS + SPLASH_FALL_MS + SPLASH_BURST_MS + 600; // dim+zoom held through splash, then a beat
+const FEATURE_TOTAL_MS = CINEMATIC_INTRO_MS + SPLASH_FALL_MS + SPLASH_BURST_MS + FEATURE_SWIM_MS;
 
 const NAME_SHOW_MS = 4500;
 
@@ -155,6 +158,7 @@ class Fish {
     this.mode = 'school';
     this.phaseStart = performance.now();
     this.badge.remove();
+    cinematicEnd(this);
     if (this.splash) { this.splash.remove(); this.splash = null; }
     const W = window.innerWidth, H = window.innerHeight;
     const baseSize = 80 + this.rand() * 80;
@@ -368,7 +372,17 @@ class Fish {
   }
 
   updateFeatured(tMs, W, H, aspect) {
-    const t = tMs - this.phaseStart;
+    const rawT = tMs - this.phaseStart;
+
+    // Phase 0: cinematic intro — keep fish off-screen while dim+banner+camera ramp up.
+    if (rawT < CINEMATIC_INTRO_MS) {
+      this.el.style.width = '10px';
+      this.el.style.height = '10px';
+      this.el.style.transform = 'translate(-9999px, -9999px)';
+      return;
+    }
+
+    const t = rawT - CINEMATIC_INTRO_MS;
 
     if (t < SPLASH_FALL_MS) {
       const u = t / SPLASH_FALL_MS;
@@ -602,6 +616,7 @@ class Fish {
   }
 
   destroy() {
+    cinematicEnd(this);
     this.el.remove();
     this.badge.remove();
     if (this.splash) this.splash.remove();
@@ -617,6 +632,85 @@ function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
 function triangleWave(x) {
   const f = x - Math.floor(x);
   return f < 0.5 ? f * 2 : 2 - f * 2;
+}
+
+// ---------- Cinematic spotlight controller ----------
+// One shared dim overlay + banner. Any fish entering `featured` mode grabs the
+// camera; when their splash phases end, the camera releases while the banner
+// lingers until the fish merges into the school.
+const cinematicDim = document.createElement('div');
+cinematicDim.className = 'tv-dim';
+document.body.appendChild(cinematicDim);
+
+const cinematicBanner = document.createElement('div');
+cinematicBanner.className = 'tv-banner';
+document.body.appendChild(cinematicBanner);
+
+const cinematicState = {
+  bannerFish: null,
+  zoomFish: null,
+  zoomReleaseTimer: null,
+};
+
+function cinematicLabel(fish) {
+  const name = (fish.name || '').trim();
+  if (name) return `✨  ${name} has joined the tank!  ✨`;
+  return `✨  A new fish has joined the tank!  ✨`;
+}
+
+function cinematicBegin(fish) {
+  if (fish.cinematicActive) return;
+  fish.cinematicActive = true;
+  fish.el.classList.add('featured-mode');
+
+  // Camera zoom + dim cut-out focused on splash point.
+  cinematicState.zoomFish = fish;
+  cinematicDim.style.setProperty('--dim-x', fish.splashX + 'px');
+  cinematicDim.style.setProperty('--dim-y', fish.splashY + 'px');
+  cinematicDim.classList.add('show');
+
+  const W = window.innerWidth, H = window.innerHeight;
+  // Transform origin must be in aquarium-local coords (= viewport, since #aquarium is fixed inset:0).
+  aq.style.transformOrigin = `${fish.splashX}px ${fish.splashY}px`;
+  aq.style.transform = 'scale(1.22)';
+
+  // Banner belongs to the most recent fish.
+  cinematicState.bannerFish = fish;
+  cinematicBanner.textContent = cinematicLabel(fish);
+  requestAnimationFrame(() => cinematicBanner.classList.add('show'));
+
+  // Release camera + dim after the splash/hold window, independent of banner.
+  if (cinematicState.zoomReleaseTimer) clearTimeout(cinematicState.zoomReleaseTimer);
+  cinematicState.zoomReleaseTimer = setTimeout(() => {
+    // Only release if this fish still owns the zoom (no newer fish took it).
+    if (cinematicState.zoomFish === fish) {
+      cinematicDim.classList.remove('show');
+      aq.style.transform = '';
+      cinematicState.zoomFish = null;
+    }
+    cinematicState.zoomReleaseTimer = null;
+  }, CINEMATIC_HOLD_MS);
+}
+
+function cinematicEnd(fish) {
+  if (!fish.cinematicActive) return;
+  fish.cinematicActive = false;
+  fish.el.classList.remove('featured-mode');
+
+  // Banner follows the most recently announced fish; drop it only if this was it.
+  if (cinematicState.bannerFish === fish) {
+    cinematicState.bannerFish = null;
+    cinematicBanner.classList.remove('show');
+  }
+  if (cinematicState.zoomFish === fish) {
+    cinematicDim.classList.remove('show');
+    aq.style.transform = '';
+    cinematicState.zoomFish = null;
+    if (cinematicState.zoomReleaseTimer) {
+      clearTimeout(cinematicState.zoomReleaseTimer);
+      cinematicState.zoomReleaseTimer = null;
+    }
+  }
 }
 
 // ---------- Ambient bubble stream ----------
@@ -675,6 +769,10 @@ async function poll() {
         const drop = () => fish.startAsSchool();
         if (fish.loaded) drop();
         else fish.img.addEventListener('load', drop, { once: true });
+      } else {
+        const kick = () => cinematicBegin(fish);
+        if (fish.loaded) kick();
+        else fish.img.addEventListener('load', kick, { once: true });
       }
       fishById.set(meta.id, fish);
     }
