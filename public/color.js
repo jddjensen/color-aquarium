@@ -67,6 +67,37 @@ const changeFishBtn = document.getElementById('changeFish');
 const submitBtn = document.getElementById('submit');
 const submitHintEl = document.getElementById('submitHint');
 
+// Platform-adaptive canvas resolution. iPhones / low-RAM phones struggle with
+// repeated getImageData / flood-fill on a 900×600 bitmap, so we downshift the
+// internal resolution for small screens. The CSS still scales the canvas to
+// fit, so the visible drawing area is identical — only the per-pixel workload
+// shrinks.
+const DEVICE = detectDevice();
+function detectDevice() {
+  const ua = navigator.userAgent || '';
+  const maxTouchPoints = navigator.maxTouchPoints || 0;
+  const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+    (ua.includes('Mac') && maxTouchPoints > 1); // iPadOS reports as Mac
+  const isAndroid = /Android/.test(ua);
+  const isMobile = isIOS || isAndroid || matchMedia('(pointer: coarse)').matches;
+  const isSmallScreen = Math.min(window.innerWidth, window.innerHeight) < 560;
+  const lowMemory = (navigator.deviceMemory && navigator.deviceMemory <= 4) ||
+                    (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4);
+  const lowPower = isMobile && (isSmallScreen || lowMemory);
+  return { isIOS, isAndroid, isMobile, isSmallScreen, lowMemory, lowPower };
+}
+document.documentElement.classList.toggle('is-mobile', DEVICE.isMobile);
+document.documentElement.classList.toggle('is-ios', DEVICE.isIOS);
+document.documentElement.classList.toggle('is-low-power', DEVICE.lowPower);
+
+// Downsize the canvas bitmap on phones so flood-fill / ImageData scans stay
+// responsive. 900×600 → 600×400 on low-power devices keeps strokes buttery.
+if (DEVICE.lowPower) {
+  const scale = 2 / 3;
+  canvas.width = Math.round(canvas.width * scale);
+  canvas.height = Math.round(canvas.height * scale);
+}
+
 // Offscreen layers (sized to canvas)
 const artCanvas   = document.createElement('canvas'); // the fish line art
 const paintCanvas = document.createElement('canvas'); // user's painting
@@ -425,6 +456,13 @@ function withTimeout(promise, ms, label) {
 
 async function getBackgroundRemovalPipeline() {
   if (backgroundRemovalUnavailable) return null;
+  // iPhones / low-power devices would pull down ~100MB of WASM and still take
+  // 30+ seconds to infer — well past our timeout. Skip it and use the raw
+  // export, which still looks great in the tank.
+  if (DEVICE.lowPower || (DEVICE.isIOS && !navigator.gpu)) {
+    backgroundRemovalUnavailable = true;
+    return null;
+  }
   if (!backgroundRemovalPipelinePromise) {
     backgroundRemovalPipelinePromise = (async () => {
       const { pipeline } = await import(HF_TRANSFORMERS_JS_URL);
@@ -584,9 +622,12 @@ document.querySelectorAll('.tool-btn').forEach(b => {
     document.querySelectorAll('.tool-btn').forEach(x => x.classList.remove('active'));
     b.classList.add('active');
     currentTool = b.dataset.tool;
-    if (currentTool === 'fill') canvas.style.cursor = 'cell';
-    else if (currentTool === 'sticker') canvas.style.cursor = 'copy';
-    else canvas.style.cursor = 'crosshair';
+    // Only bother with the cursor swap on devices that actually have a cursor.
+    if (!DEVICE.isMobile) {
+      if (currentTool === 'fill') canvas.style.cursor = 'cell';
+      else if (currentTool === 'sticker') canvas.style.cursor = 'copy';
+      else canvas.style.cursor = 'crosshair';
+    }
     // Show the sticker picker only when the sticker tool is selected.
     if (stickerPanel) stickerPanel.hidden = (currentTool !== 'sticker');
     // If switching away from sticker, tear down any in-flight preview.

@@ -32,6 +32,31 @@ if (REDUCE_MOTION_QUERY.addEventListener) {
   REDUCE_MOTION_QUERY.addEventListener('change', (e) => { REDUCE_MOTION = e.matches; });
 }
 
+// ---- Platform detection: scale down effects on phones / low-power devices ----
+// The aquarium is primarily designed for a big TV / kiosk, but guests may also
+// open it on their phone. Detect that and dial back the expensive bits
+// (WebGL caustics, drop-shadows, ambient bubble cadence) so iPhones stay
+// smooth without silently breaking the big-screen experience.
+const DEVICE = (() => {
+  const ua = navigator.userAgent || '';
+  const maxTouchPoints = navigator.maxTouchPoints || 0;
+  const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+    (ua.includes('Mac') && maxTouchPoints > 1);
+  const isAndroid = /Android/.test(ua);
+  const isMobile = isIOS || isAndroid || matchMedia('(pointer: coarse)').matches;
+  const isSmallScreen = Math.min(window.innerWidth, window.innerHeight) < 560;
+  const lowMemory = (navigator.deviceMemory && navigator.deviceMemory <= 4) ||
+                    (navigator.hardwareConcurrency && navigator.hardwareConcurrency <= 4);
+  const lowPower = isMobile && (isSmallScreen || lowMemory);
+  return { isIOS, isAndroid, isMobile, isSmallScreen, lowMemory, lowPower };
+})();
+document.documentElement.classList.toggle('is-mobile', DEVICE.isMobile);
+document.documentElement.classList.toggle('is-ios', DEVICE.isIOS);
+document.documentElement.classList.toggle('is-low-power', DEVICE.lowPower);
+// Low-power devices (iPhone 12 mini, older Androids) get the reduced-motion
+// codepath automatically — fewer particles, no cinematic zoom, no WebGL.
+if (DEVICE.lowPower) REDUCE_MOTION = true;
+
 // ---- Day/night tint: warm→cool filter sweep by local hour ----
 const TINT_KEYFRAMES = [
   { h: 0,  b: .78, hue: -8,  sat: .90, sep: .00 },
@@ -323,7 +348,11 @@ function initCaustics(canvas) {
   };
 }
 
-const caustics = initCaustics(causticsCanvas);
+// Skip the WebGL caustics shader entirely on low-power devices — it costs a
+// full-screen fragment pass every frame and dominates the iPhone thermal
+// budget. The CSS fallback (caustics-fallback class) stays visually plausible.
+const caustics = DEVICE.lowPower ? (causticsCanvas?.classList.add('caustics-fallback'), null)
+                                 : initCaustics(causticsCanvas);
 
 class Fish {
   constructor(meta) {
