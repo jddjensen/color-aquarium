@@ -168,6 +168,27 @@ const SPECIES_TRAITS = {
 };
 const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0 };
 
+// ---- Personalities: archetypes that tune existing behavior weights ----
+// Each fish rolls one on spawn (deterministic by id) and it shifts how eagerly
+// it socializes, flees, visits the glass, and idles. Numbers are multipliers
+// over the baseline — nothing new is introduced behaviorally, the fish just
+// leans one way. Keeps the tank feeling like individuals, not clones.
+const PERSONALITIES = {
+  shy:     { id: 'shy',     encounterK: 0.55, glassK: 0.45, scareMul: 1.45, cohesionK: 1.30, idleBoost: 1.15 },
+  bold:    { id: 'bold',    encounterK: 1.55, glassK: 1.80, scareMul: 0.65, cohesionK: 0.85, idleBoost: 0.80 },
+  curious: { id: 'curious', encounterK: 1.35, glassK: 1.90, scareMul: 1.00, cohesionK: 1.00, idleBoost: 0.95 },
+  lazy:    { id: 'lazy',    encounterK: 0.60, glassK: 0.60, scareMul: 1.15, cohesionK: 1.10, idleBoost: 1.80 },
+  leader:  { id: 'leader',  encounterK: 1.10, glassK: 1.00, scareMul: 0.80, cohesionK: 0.70, idleBoost: 0.90 },
+};
+const PERSONALITY_ORDER = ['shy', 'bold', 'curious', 'lazy', 'leader'];
+const DEFAULT_PERSONALITY = PERSONALITIES.curious;
+
+// Species that stake out a patch of tank and loosely patrol it instead of
+// drifting anywhere. A soft radial spring holds them near their home center.
+// Leaves schooling fish (swimmers) unrestricted — territories are a solo trait.
+const TERRITORIAL_SPECIES = new Set(['shark1', 'eel1', 'octo1']);
+const TERRITORY_RADIUS = 220;
+
 // If you add a new species, give it a custom arrival touch here too.
 const SPECIES_ARRIVALS = {
   fish1:     { effect: 'glow',    path: 'playful', splashBand: [0.24, 0.34], endYF: 0.53, sway: 0.65 },
@@ -526,6 +547,42 @@ class Fish {
     // to read as "something broke the water."
     this.surfaceRippleCooldown = 0;
     this._wasNearSurface = false;
+
+    // ---- Personality: deterministic archetype per fish id ----
+    const pKey = PERSONALITY_ORDER[Math.floor(this.rand() * PERSONALITY_ORDER.length)];
+    this.personality = PERSONALITIES[pKey] || DEFAULT_PERSONALITY;
+
+    // ---- Banking on turns: track prior travel direction; when vx flips,
+    // play a short roll so the body leans into the new direction. ----
+    this._prevVxSign = 0;
+    this.bankTTL = 0;
+    this.bankDur = 0.55;
+    this.bankDir = 0;
+
+    // ---- Breathing: very slow, tiny body pulse. Offset per fish so they
+    // don't breathe in unison. ----
+    this.breatheOffset = this.rand() * Math.PI * 2;
+
+    // ---- Idle hover: a dedicated phase for the pectoral-fin flutter so it
+    // doesn't phase-lock with the main tail wiggle. ----
+    this.hoverPhase = this.rand() * Math.PI * 2;
+
+    // ---- Territory (solo species only) ----
+    if (TERRITORIAL_SPECIES.has(this.species)) {
+      const W = window.innerWidth, H = window.innerHeight;
+      const yMin = (this.traits.yMinF || 0.1) * H;
+      const yMax = (this.traits.yMaxF || 0.9) * H;
+      this.home = {
+        x: W * (0.22 + this.rand() * 0.56),
+        y: yMin + this.rand() * Math.max(1, yMax - yMin),
+        r: TERRITORY_RADIUS * (0.85 + this.rand() * 0.4),
+      };
+    } else {
+      this.home = null;
+    }
+
+    // ---- Wake distortion element (created on demand when a fish goes fast) ----
+    this.wakeEl = null;
   }
 
   startAsSchool() {
@@ -670,6 +727,9 @@ class Fish {
     const ageSchool = this.layer?.progress || 0;
     if (ageSchool <= 0) return;
     if (this.scareTTL > 0 || this.encounterState === 'chase' || this.encounterState === 'fleeing') return;
+    // Territorial species have their own anchor (applyTerritory) — having
+    // both pulls fight each other parks them in weird compromise spots.
+    if (this.home) return;
 
     const anchor = this.backgroundAnchor(W, H, nowEpochMs);
     const myCx = this.x + this.size * 0.5;
@@ -736,7 +796,7 @@ class Fish {
       if (this.nameTag) this.nameShowUntil = Math.max(this.nameShowUntil, tMs + 600);
       if (this.glassCuriosityTTL <= 0) {
         this.glassCuriosityTarget = null;
-        this.glassCuriosityCooldown = 14 + this.rand() * 20;
+        this.glassCuriosityCooldown = (14 + this.rand() * 20) / this.personality.glassK;
         return;
       }
       const target = this.glassCuriosityTarget;
@@ -754,7 +814,7 @@ class Fish {
     }
     this.glassCuriosityCooldown -= dt;
     if (this.glassCuriosityCooldown > 0) return;
-    this.glassCuriosityCooldown = 10 + this.rand() * 18;
+    this.glassCuriosityCooldown = (10 + this.rand() * 18) / this.personality.glassK;
     if (this.rand() < 0.55) return;
     this.glassCuriosityTTL = 1.8 + this.rand() * 1.6;
     this.glassCuriosityTarget = {
@@ -875,10 +935,12 @@ class Fish {
     }
     this.applyEncounterForce(dt);
     this.applyCursorRepulsion(dt);
-    this.applyFlocking(dt, scene.schoolFish);
+    this.applyFlocking(dt, scene.schoolFish, scene.leaderBySpecies);
     this.applyBackgroundSchooling(dt, W, H, nowEpochMs);
+    this.applyTerritory(dt);
     this.applyTankSceneForces(dt, tMs, W, H, scene.events);
     this.stepIdle(dt, tMs);
+    this.stepBanking(dt);
 
     this.x += this.vx * dt;
     this.y += this.vy * dt;
@@ -917,6 +979,7 @@ class Fish {
 
     this.stepBehindPass(dt);
     if (!REDUCE_MOTION) this.stepSpeedTrail(dt, w, h);
+    if (!REDUCE_MOTION && !DEVICE.lowPower) this.stepWake(dt, w, h);
     this.stepSurfaceRipple(dt, w);
 
     // Puffer-only: rare puff-up behavior.
@@ -942,6 +1005,81 @@ class Fish {
       this.surfaceRippleCooldown = 1.4 + Math.random() * 0.6;
     }
     this._wasNearSurface = true;
+  }
+
+  // Territorial fish (sharks, eels, octopi) hover near a personal home
+  // point they claimed at spawn. Weak radial spring — easily overridden by
+  // chase/scare — so it adds structure without caging them.
+  applyTerritory(dt) {
+    if (!this.home) return;
+    if (this.scareTTL > 0) return;
+    if (this.encounterState === 'chase' || this.encounterState === 'fleeing') return;
+    const myCx = this.x + this.size * 0.5;
+    const myCy = this.y + this.size * 0.5;
+    const dx = this.home.x - myCx;
+    const dy = this.home.y - myCy;
+    const d = Math.hypot(dx, dy);
+    if (d < this.home.r * 0.5) return;
+    // Strengthen past the home radius; inside it, only a whisper.
+    const over = Math.max(0, d - this.home.r * 0.5);
+    const pull = Math.min(0.35, 0.06 + over / Math.max(1, this.home.r) * 0.22);
+    this.vx += (dx / (d || 1)) * pull * over * dt;
+    this.vy += (dy / (d || 1)) * pull * over * dt;
+  }
+
+  // Banking on turns: when horizontal travel direction flips, start a short
+  // roll that eases through 0→peak→0 rotateY. Just the state machine here;
+  // the actual rotation is applied in renderSprite.
+  stepBanking(dt) {
+    const sign = Math.abs(this.vx) < 14 ? 0 : (this.vx > 0 ? 1 : -1);
+    if (sign !== 0 && this._prevVxSign !== 0 && sign !== this._prevVxSign) {
+      // Fresh turn — arm a bank in the new direction.
+      this.bankTTL = this.bankDur;
+      this.bankDir = sign;
+    }
+    if (sign !== 0) this._prevVxSign = sign;
+    if (this.bankTTL > 0) this.bankTTL = Math.max(0, this.bankTTL - dt);
+  }
+
+  // Wake distortion: a faint trailing wedge behind fast-moving fish. The
+  // element is created lazily, positioned behind the sprite (opposite
+  // travel), scaled by speed, and faded out when the fish slows down.
+  // Skipped entirely on reduce-motion / low-power.
+  stepWake(dt, w, h) {
+    const speed = Math.hypot(this.vx, this.vy);
+    const threshold = this.baseSpeed * 1.6;
+    const active = speed > threshold;
+    if (!active) {
+      if (this.wakeEl) {
+        this.wakeEl.style.opacity = '0';
+      }
+      return;
+    }
+    if (!this.wakeEl) {
+      const el = document.createElement('div');
+      el.className = 'fish-wake';
+      aq.appendChild(el);
+      this.wakeEl = el;
+    }
+    // Direction: wedge sits directly behind the fish opposite travel.
+    const mag = speed || 1;
+    const nx = this.vx / mag;
+    const ny = this.vy / mag;
+    const backX = -nx;
+    const backY = -ny;
+    const intensity = Math.min(1, (speed - threshold) / (this.baseSpeed * 1.8));
+    const length = (h * 0.9) * (0.6 + intensity * 0.8);
+    const thickness = Math.max(12, h * 0.32);
+    const cx = this.x + w * 0.5 + backX * length * 0.55;
+    const cy = this.y + h * 0.5 + backY * length * 0.55;
+    const angle = Math.atan2(ny, nx) * 180 / Math.PI;
+    this.wakeEl.style.width = `${length}px`;
+    this.wakeEl.style.height = `${thickness}px`;
+    this.wakeEl.style.opacity = String(0.18 + intensity * 0.32);
+    this.wakeEl.style.transform =
+      `translate(${cx - length / 2}px, ${cy - thickness / 2}px) rotate(${angle}deg)`;
+    // Sit just above the background caustics but below normal fish sprites.
+    this.wakeEl.style.zIndex = String(Math.max(2, Math.round((this.layer?.zIndex || 5) - 1)));
   }
 
   // Rare schooling exception: slip behind peers and coral for a moment.
@@ -1050,11 +1188,13 @@ class Fish {
     this.idleDuration = 0;
   }
 
-  applyFlocking(dt, schoolFish) {
+  applyFlocking(dt, schoolFish, leaderBySpecies) {
     // Solitary / sedentary animals don't school.
     if (this.locomotion === 'predator' || this.locomotion === 'crawler'
         || this.locomotion === 'walker' || this.locomotion === 'clinger'
         || this.locomotion === 'jetter') return;
+    // Territorial fish keep to their own patch — skip flocking and leader pull.
+    if (this.home) return;
     const ageSchool = this.layer?.progress || 0;
     // Species-weighted boids + extra same-species cohesion pass, so fish of
     // the same kind group into tight shoals while different species stay
@@ -1101,10 +1241,11 @@ class Fish {
         sameN++;
       }
     }
+    const cohesionMul = this.personality.cohesionK;
     if (wAlign > 0) {
       ax /= wAlign; ay /= wAlign;
       const alignK = 0.55 + ageSchool * 0.14;
-      const cohesionK = 0.24 + ageSchool * 0.18;
+      const cohesionK = (0.24 + ageSchool * 0.18) * cohesionMul;
       this.vx += (ax - this.vx) * alignK * dt;
       this.vy += (ay - this.vy) * alignK * dt;
       cx = cx / wAlign - myCx;
@@ -1120,12 +1261,42 @@ class Fish {
       sameCy = sameCy / sameN - myCy;
       this.vx += (sameVx - this.vx) * (0.35 + ageSchool * 0.2) * dt;
       this.vy += (sameVy - this.vy) * (0.35 + ageSchool * 0.2) * dt;
-      this.vx += sameCx * (0.30 + ageSchool * 0.24) * dt;
-      this.vy += sameCy * (0.30 + ageSchool * 0.24) * dt;
+      this.vx += sameCx * (0.30 + ageSchool * 0.24) * cohesionMul * dt;
+      this.vy += sameCy * (0.30 + ageSchool * 0.24) * cohesionMul * dt;
     }
     if (nSep > 0) {
       this.vx += sx * (90 - ageSchool * 14) * dt;
       this.vy += sy * (90 - ageSchool * 14) * dt;
+    }
+    // Group hierarchy: followers of a same-species leader align to the
+    // leader's velocity harder than to the generic average, producing
+    // visible lead-and-follow formations. The leader itself (and solitary
+    // locomotions) get no pull.
+    if (leaderBySpecies && this.species) {
+      const leader = leaderBySpecies.get(this.species);
+      if (leader && leader !== this) {
+        const LEADER_NEIGHBOR = 360 + ageSchool * 140;
+        const lx = leader.x + leader.size * 0.5;
+        const ly = leader.y + leader.size * 0.5;
+        const ldx = lx - myCx;
+        const ldy = ly - myCy;
+        const ld = Math.hypot(ldx, ldy);
+        if (ld < LEADER_NEIGHBOR) {
+          // Stronger alignment (1.5x the same-species pass) plus a soft
+          // cohesion pull toward a trailing slot behind the leader, so
+          // followers don't climb into its head.
+          const align = (0.52 + ageSchool * 0.30) * cohesionMul;
+          this.vx += (leader.vx - this.vx) * align * dt;
+          this.vy += (leader.vy - this.vy) * align * dt;
+          const lvMag = Math.hypot(leader.vx, leader.vy) || 1;
+          const offset = 90 + this.depthJitter * 40;
+          const slotX = lx - (leader.vx / lvMag) * offset;
+          const slotY = ly - (leader.vy / lvMag) * offset;
+          const coh = (0.22 + ageSchool * 0.18) * cohesionMul;
+          this.vx += (slotX - myCx) * coh * dt;
+          this.vy += (slotY - myCy) * coh * dt;
+        }
+      }
     }
     // Clamp speed so boids don't blow up. Chase/flee raises the ceiling so
     // fish can actually commit to a pursuit.
@@ -1156,7 +1327,7 @@ class Fish {
     }
     this.encounterCooldown -= dt;
     if (this.encounterCooldown > 0) return;
-    this.encounterCooldown = 8 + this.rand() * 18;
+    this.encounterCooldown = (8 + this.rand() * 18) / this.personality.encounterK;
     this.tryInitiateEncounter(schoolFish);
   }
 
@@ -1210,7 +1381,7 @@ class Fish {
     this.encounterTarget = null;
     this.encounterTTL = 0;
     // Stagger so interacting pairs don't immediately re-engage.
-    this.encounterCooldown = 12 + this.rand() * 20;
+    this.encounterCooldown = (12 + this.rand() * 20) / this.personality.encounterK;
   }
 
   applyEncounterForce(dt) {
@@ -1276,7 +1447,7 @@ class Fish {
       const dy = (other.y + other.size * 0.5) - myCy;
       const d = Math.hypot(dx, dy);
       if (d > r || d < 0.001) continue;
-      this.scareTTL = 1.5 + this.rand() * 1.0;
+      this.scareTTL = (1.5 + this.rand() * 1.0) * this.personality.scareMul;
       this.scareDir = { x: -dx / d, y: -dy / d };
       // Puffer defense: inflate when the shark gets close.
       if (this.isPuffer && this.puffTarget === 0) {
@@ -1503,16 +1674,18 @@ class Fish {
     }
     this.idleTimer -= dt;
     if (this.idleTimer <= 0 && this.dartPhase !== 'dart') {
-      // ~35% chance of an idle pause, otherwise just a tail-flick micro-burst.
-      if (this.rand() < 0.35) {
+      // ~35% chance of an idle pause (higher for lazy personalities),
+      // otherwise just a tail-flick micro-burst.
+      const idleChance = 0.35 * this.personality.idleBoost;
+      if (this.rand() < idleChance) {
         this.isIdle = true;
-        this.idleDuration = 1.2 + this.rand() * 1.8;
+        this.idleDuration = (1.2 + this.rand() * 1.8) * this.personality.idleBoost;
       } else {
         const dir = Math.sign(this.vx || 1);
         this.vx = dir * this.baseSpeed * (1.8 + this.rand() * 0.6);
         this.vy += (this.rand() - 0.5) * 20;
       }
-      this.idleTimer = 5 + this.rand() * 10;
+      this.idleTimer = (5 + this.rand() * 10) / this.personality.idleBoost;
     }
   }
 
@@ -1798,12 +1971,39 @@ class Fish {
     this.el.style.width = w + 'px';
     this.el.style.height = h + 'px';
     const puffScale = 1 + (this.puffLevel || 0) * 0.55;
+    // Breathing: very slow ~0.5 Hz pulse, amplitude ~1.5%. Offset per fish
+    // so the tank doesn't breathe in unison.
+    const nowSec = performance.now() * 0.001;
+    const breathe = 1 + Math.sin(nowSec * Math.PI + this.breatheOffset) * 0.015;
+    const finalScale = puffScale * breathe;
     // Compensate translation so the fish puffs from its center, not top-left.
-    const puffOffset = (puffScale - 1) * 0.5;
-    const tx = x - w * puffOffset;
-    const ty = y - h * puffOffset;
-    this.el.style.transform = `translate(${tx}px, ${ty}px) scale(${puffScale})`;
-    this.flipEl.style.transform = `scaleX(${flip})`;
+    const puffOffset = (finalScale - 1) * 0.5;
+    let tx = x - w * puffOffset;
+    let ty = y - h * puffOffset;
+    // Depth parallax: when the cursor moves, settled (deeper) fish drift a
+    // few pixels opposite the cursor so the tank gains volume. Fresh fish
+    // in the foreground get almost none — they're "close to the glass."
+    if (cursor.active && this.layer) {
+      const cxScreen = window.innerWidth * 0.5;
+      const cyScreen = window.innerHeight * 0.5;
+      const nxc = (cursor.x - cxScreen) / Math.max(1, cxScreen);
+      const nyc = (cursor.y - cyScreen) / Math.max(1, cyScreen);
+      const amount = this.layer.progress * 4;
+      tx += -nxc * amount;
+      ty += -nyc * amount;
+    }
+    this.el.style.transform = `translate(${tx}px, ${ty}px) scale(${finalScale})`;
+    // Banking: rotateY around the vertical axis during a turn.
+    // Inline perspective() on the same transform avoids the ancestor
+    // preserve-3d chain, which gets flattened by our drop-shadow filter.
+    const bankNorm = this.bankTTL > 0 ? (this.bankTTL / this.bankDur) : 0;
+    // Half-sine hump: 0→peak→0 across the bank life so the lean eases in
+    // and recovers instead of snapping.
+    const bankAmt = Math.sin(Math.PI * (1 - bankNorm)) * 14 * this.bankDir;
+    const flipTransform = bankAmt !== 0
+      ? `perspective(800px) scaleX(${flip}) rotateY(${bankAmt.toFixed(2)}deg)`
+      : `scaleX(${flip})`;
+    this.flipEl.style.transform = flipTransform;
     this.pitchEl.style.transform = `rotate(${clamped}rad)`;
     // Sting rays get a subtle vertical "wing flap" on top of the tail skew.
     // Sea slugs get an inchworm-style horizontal pulse (stretches while
@@ -1836,6 +2036,24 @@ class Fish {
       const moving = Math.min(1, Math.abs(vx) / 14);
       const hop = -Math.abs(Math.sin(this.wigglePhase)) * 2.4 * (0.25 + 0.75 * moving);
       wiggleParts.push(`translateY(${hop.toFixed(2)}px)`);
+    }
+    // Refraction near the surface: fish in the top ~120 px of the tank look
+    // like they're being viewed through moving water. A very small skewX
+    // driven by the existing wiggle phase reads as rippled refraction.
+    const REFRACTION_BAND = 120;
+    if (y < REFRACTION_BAND) {
+      const proximity = 1 - (y / REFRACTION_BAND);
+      const skewX = Math.sin(this.wigglePhase * 1.1) * 0.055 * proximity;
+      wiggleParts.push(`skewX(${skewX.toFixed(4)}rad)`);
+    }
+    // Idle pectoral-fin flutter: while paused, add a fast low-amplitude
+    // body pulse. Real fish never stop moving — this sells the hover.
+    // Driven off wall-clock time so it's frame-rate independent.
+    if (this.isIdle) {
+      const t = nowSec * 8 + this.hoverPhase;
+      const flutterX = 1 + Math.sin(t) * 0.018;
+      const flutterY = 1 + Math.cos(t * 1.3) * 0.012;
+      wiggleParts.push(`scale(${flutterX.toFixed(4)}, ${flutterY.toFixed(4)})`);
     }
     this.wiggleEl.style.transform = wiggleParts.join(' ');
     this.renderShadow(x, y, w, h, vx);
@@ -1900,6 +2118,9 @@ class Fish {
     this.scareTTL = 0;
     this.isIdle = false;
     this.puffTarget = 0;
+    this.bankTTL = 0;
+    // Fade any active wake; the element is reaped in destroy().
+    if (this.wakeEl) this.wakeEl.style.opacity = '0';
     // Choose exit side: whichever edge is closer.
     const W = window.innerWidth;
     const myCx = (this.x || 0) + (this.size || 100) * 0.5;
@@ -1949,6 +2170,7 @@ class Fish {
     this.badge.remove();
     if (this.splash) this.splash.remove();
     if (this.nameTag) this.nameTag.remove();
+    if (this.wakeEl) { this.wakeEl.remove(); this.wakeEl = null; }
   }
 }
 
@@ -2276,9 +2498,31 @@ function tick(now) {
     schoolFish.push(fish);
     if (fish.isShark) predators.push(fish);
   }
+  // Group hierarchies: pick a leader per species from the school.
+  // Criteria: the 'leader' personality wins if present, otherwise the fish
+  // with the largest rendered size. Ties broken by oldest (stable across
+  // frames so followers don't jitter between candidates).
+  const leaderBySpecies = new Map();
+  for (const fish of schoolFish) {
+    if (!fish.species) continue;
+    // Leaders can only belong to flocking species.
+    if (fish.locomotion === 'predator' || fish.locomotion === 'crawler'
+        || fish.locomotion === 'walker' || fish.locomotion === 'clinger'
+        || fish.locomotion === 'jetter') continue;
+    const cur = leaderBySpecies.get(fish.species);
+    if (!cur) { leaderBySpecies.set(fish.species, fish); continue; }
+    const fIsLeader = fish.personality?.id === 'leader';
+    const cIsLeader = cur.personality?.id === 'leader';
+    if (fIsLeader && !cIsLeader) { leaderBySpecies.set(fish.species, fish); continue; }
+    if (!fIsLeader && cIsLeader) continue;
+    if (fish.size > cur.size + 0.5) { leaderBySpecies.set(fish.species, fish); continue; }
+    if (Math.abs(fish.size - cur.size) < 0.5 && fish.createdAt < cur.createdAt) {
+      leaderBySpecies.set(fish.species, fish);
+    }
+  }
   advanceTankEvents(now, schoolFish);
   if (caustics) caustics.render(now);
-  const scene = { nowEpochMs, schoolFish, predators, events: tankEvents };
+  const scene = { nowEpochMs, schoolFish, predators, events: tankEvents, leaderBySpecies };
   for (const fish of fishById.values()) fish.update(dt, now, scene);
   requestAnimationFrame(tick);
 }

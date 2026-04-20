@@ -857,6 +857,34 @@ html.is-low-power .surface-waterline {
     radial-gradient(circle at 32% 30%, rgba(255,255,255,.9) 0%, rgba(210,235,255,.35) 45%, rgba(180,220,255,0) 95%);
 }
 
+/* Wake distortion: an elongated, blurred wedge trailing a fast-moving fish.
+   Built as a gradient with a mask so it fades to nothing on each end,
+   selling it as disturbed water rather than a painted shape. No animation —
+   JS updates position/opacity per frame while the fish is fast. */
+.fish-wake {
+  position: absolute;
+  top: 0; left: 0;
+  pointer-events: none;
+  opacity: 0;
+  border-radius: 50%;
+  background: linear-gradient(
+    to right,
+    rgba(255,255,255,0) 0%,
+    rgba(220,245,255,0.20) 30%,
+    rgba(255,255,255,0.45) 60%,
+    rgba(210,240,255,0.18) 85%,
+    rgba(255,255,255,0) 100%);
+  mix-blend-mode: screen;
+  filter: blur(6px);
+  transform-origin: 50% 50%;
+  will-change: transform, opacity;
+  transition: opacity 180ms linear;
+}
+html.is-low-power .fish-wake { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .fish-wake { display: none; }
+}
+
 .arrival-fx {
   position: absolute;
   top: 0;
