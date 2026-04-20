@@ -2,7 +2,7 @@ const SPECIES_LABELS = {
   fish1: "Goldie",
   fish2: "Angel",
   fish3: "Clown",
-  fish4: "Blue Tang",
+  fish4: "Angler Fish",
   fish5: "Tropical Fish",
   puffer1: "Puffer",
   seahorse1: "Seahorse",

@@ -5,7 +5,7 @@ const FISH = [
   { id: 'fish1',    src: '/assets/fish1.png',    label: 'Goldie' },
   { id: 'fish2',    src: '/assets/fish2.png',    label: 'Angel' },
   { id: 'fish3',    src: '/assets/fish3.png',    label: 'Clown' },
-  { id: 'fish4',    src: '/assets/fish4.png',    label: 'Blue Tang' },
+  { id: 'fish4',    src: '/assets/fish4.png',    label: 'Angler Fish' },
   { id: 'fish5',    src: '/assets/fish5.png',    label: 'Tropical' },
   { id: 'puffer1',  src: '/assets/Puffer1.png',  label: 'Puffer' },
   { id: 'seahorse1',src: '/assets/seahorse1.png',label: 'Seahorse' },

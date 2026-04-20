@@ -531,6 +531,162 @@ body.aquarium {
 .tank-fx-back { z-index: 2; }
 .tank-fx-front { z-index: 16; }
 
+/* ---- Water surface (the ceiling of the tank) ----
+   Thin strip at the top of #aquarium. Two shimmer layers drift in opposite
+   directions to suggest moving light on a water surface, plus a crisp
+   waterline at the bottom edge. Positioned above the caustics but below the
+   featured-mode splash/badge layer so new-arrival cinematics still read. */
+.water-surface {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 72px;
+  pointer-events: none;
+  z-index: 11;
+  overflow: hidden;
+  /* Gradient from a bright sunlit "air" tint down to transparent water.
+     Alpha ramps so the strip reads as a refracted band, not a banner. */
+  background:
+    linear-gradient(
+      to bottom,
+      rgba(214, 240, 255, 0.42) 0%,
+      rgba(168, 222, 250, 0.30) 32%,
+      rgba(120, 200, 240, 0.14) 68%,
+      rgba(80, 170, 220, 0.00) 100%
+    );
+  mix-blend-mode: screen;
+}
+
+/* Two shimmer bands sliding across the surface. Each is a wide
+   repeating-linear-gradient that's translated horizontally. The large
+   negative starting offset + wide content make the loop seamless. */
+.surface-shimmer {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -50%;
+  width: 200%;
+  background: repeating-linear-gradient(
+    98deg,
+    rgba(255, 255, 255, 0) 0px,
+    rgba(255, 255, 255, 0) 40px,
+    rgba(255, 255, 255, 0.10) 60px,
+    rgba(255, 255, 255, 0.22) 72px,
+    rgba(255, 255, 255, 0.10) 84px,
+    rgba(255, 255, 255, 0) 108px,
+    rgba(255, 255, 255, 0) 180px
+  );
+  mask-image: linear-gradient(to bottom,
+    rgba(0,0,0,1) 0%,
+    rgba(0,0,0,.65) 55%,
+    rgba(0,0,0,0) 100%);
+  -webkit-mask-image: linear-gradient(to bottom,
+    rgba(0,0,0,1) 0%,
+    rgba(0,0,0,.65) 55%,
+    rgba(0,0,0,0) 100%);
+  animation: surface-drift 14s linear infinite;
+  will-change: transform;
+}
+.surface-shimmer-2 {
+  opacity: .55;
+  animation: surface-drift-rev 22s linear infinite;
+  background: repeating-linear-gradient(
+    82deg,
+    rgba(255, 255, 255, 0) 0px,
+    rgba(255, 255, 255, 0) 70px,
+    rgba(190, 235, 255, 0.12) 90px,
+    rgba(220, 245, 255, 0.20) 104px,
+    rgba(190, 235, 255, 0.12) 118px,
+    rgba(255, 255, 255, 0) 150px,
+    rgba(255, 255, 255, 0) 240px
+  );
+}
+
+/* A faint bright line 2/3 of the way down the strip — the actual water/air
+   interface. Kept soft so it reads as reflection, not a hard seam. */
+.surface-waterline {
+  position: absolute;
+  left: 0; right: 0;
+  top: 46px;
+  height: 2px;
+  background: linear-gradient(to right,
+    rgba(255,255,255,0) 0%,
+    rgba(255,255,255,0.32) 18%,
+    rgba(255,255,255,0.55) 50%,
+    rgba(255,255,255,0.32) 82%,
+    rgba(255,255,255,0) 100%);
+  filter: blur(0.6px);
+  animation: waterline-pulse 7.5s ease-in-out infinite;
+}
+
+@keyframes surface-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(50%, 0, 0); }
+}
+@keyframes surface-drift-rev {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
+}
+@keyframes waterline-pulse {
+  0%, 100% { opacity: .75; }
+  50%      { opacity: 1.0; }
+}
+
+/* Ripple layer sits inside the water-surface div and is anchored to the
+   waterline so emitted ripples always ride the same horizontal line. */
+.surface-ripples {
+  position: absolute;
+  top: 46px;
+  left: 0; right: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+/* A single ripple: two concentric ovals that scale outward and fade. Ovals
+   (scaleY compressed) sell the top-down perspective of a surface ring. */
+.surface-ripple {
+  position: absolute;
+  top: 0; left: 0;
+  width: 28px;
+  height: 28px;
+  margin-left: -14px;
+  margin-top: -14px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 10px rgba(220, 240, 255, 0.55);
+  opacity: 0;
+  transform: scale(0.2, 0.08);
+  will-change: transform, opacity;
+  animation: surface-ripple 1400ms ease-out forwards;
+}
+.surface-ripple.inner {
+  border-color: rgba(255, 255, 255, 0.55);
+  animation-duration: 1150ms;
+  animation-delay: 180ms;
+}
+@keyframes surface-ripple {
+  0%   { opacity: 0;   transform: scale(0.2, 0.08); }
+  12%  { opacity: 0.9; }
+  100% { opacity: 0;   transform: scale(3.6, 0.55); }
+}
+
+/* Low-power / reduced-motion: keep the surface visible but stop animating.
+   The shimmer still reads because the gradient itself is layered. */
+html.is-low-power .surface-shimmer,
+html.is-low-power .surface-shimmer-2,
+html.is-low-power .surface-waterline {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .surface-shimmer,
+  .surface-shimmer-2,
+  .surface-waterline {
+    animation: none;
+  }
+  .surface-ripple,
+  .surface-ripple.inner {
+    animation-duration: 900ms;
+  }
+}
+
 .light-beam-pulse {
   position: absolute;
   top: -10%;
@@ -691,6 +847,14 @@ body.aquarium {
   z-index: 7;
   opacity: 0;
   will-change: transform, opacity;
+}
+
+/* Speed-trail variant: lighter border, faintly warmer so the tiny pops read
+   as water displaced by a fast swimmer rather than a deliberate bubble. */
+.bubble-pop.speed {
+  border-color: rgba(255,255,255,.28);
+  background:
+    radial-gradient(circle at 32% 30%, rgba(255,255,255,.9) 0%, rgba(210,235,255,.35) 45%, rgba(180,220,255,0) 95%);
 }
 
 .arrival-fx {

@@ -5,7 +5,16 @@ const causticsCanvas = document.getElementById('caustics');
 
 /** @type {Map<string, Fish>} */
 const fishById = new Map();
+// Fish that have been culled locally (swam off during the periodic thin-out).
+// Kept so the poller doesn't immediately recreate them from the server list.
+// Cleared on day rollover alongside fishById.
+const culledIds = new Set();
 let currentDay = null;
+
+// Every CULL_INTERVAL_MS, half of the school-mode fish are sent off-screen.
+// Keeps the tank from growing unbounded at an event.
+const CULL_INTERVAL_MS = 10 * 60 * 1000;
+const CULL_FRACTION = 0.5;
 // Short polling — guests watch the podium→TV handoff, low latency sells the magic.
 const POLL_MS = 1200;
 
@@ -502,6 +511,21 @@ class Fish {
     this.glassCuriosityCooldown = 8 + this.rand() * 14;
     this.glassCuriosityTTL = 0;
     this.glassCuriosityTarget = null;
+
+    // Occasional "swim behind" pass — when in a school, a fish may briefly
+    // slip behind peers and coral instead of riding on top. Preference is to
+    // stay in the foreground; this is the exception, not the rule.
+    this.behindTTL = 0;
+    this.behindCooldown = 22 + this.rand() * 45;
+
+    // Fast-fish bubble trail throttling.
+    this.speedBubbleTimer = 0;
+
+    // Surface-ripple cooldown so a fish lingering near the surface doesn't
+    // spam ripples every frame. One ripple every ~1.6s per fish is plenty
+    // to read as "something broke the water."
+    this.surfaceRippleCooldown = 0;
+    this._wasNearSurface = false;
   }
 
   startAsSchool() {
@@ -623,16 +647,22 @@ class Fish {
 
   applyDepthVisuals(state) {
     const settling = this.el.classList.contains('school-settling');
-    const zIndex = settling ? Math.max(9, Math.round(state.zIndex)) : Math.round(state.zIndex);
+    const behind = this.behindTTL > 0;
+    let zIndex = settling ? Math.max(9, Math.round(state.zIndex)) : Math.round(state.zIndex);
+    // Behind-pass: drop below peers (and below the coral overlay zIndex).
+    if (behind && !settling) zIndex = Math.max(2, zIndex - 4);
+    const blur = state.blur + (behind ? 0.9 : 0);
+    const brightness = state.brightness * (behind ? 0.88 : 1);
     if (!this._appliedDepth
         || Math.abs(this._appliedDepth.progress - state.progress) > 0.01
-        || this._appliedDepth.settling !== settling) {
+        || this._appliedDepth.settling !== settling
+        || this._appliedDepth.behind !== behind) {
       this.el.style.zIndex = String(zIndex);
       this.el.style.opacity = state.opacity.toFixed(3);
       this.el.style.filter =
         `drop-shadow(0 ${state.dropShadowY.toFixed(1)}px ${state.dropShadowBlur.toFixed(1)}px rgba(0,0,0,${state.dropShadowAlpha.toFixed(3)})) ` +
-        `saturate(${state.saturate.toFixed(3)}) brightness(${state.brightness.toFixed(3)}) blur(${state.blur.toFixed(2)}px)`;
-      this._appliedDepth = { progress: state.progress, settling };
+        `saturate(${state.saturate.toFixed(3)}) brightness(${brightness.toFixed(3)}) blur(${blur.toFixed(2)}px)`;
+      this._appliedDepth = { progress: state.progress, settling, behind };
     }
   }
 
@@ -885,8 +915,108 @@ class Fish {
       }
     }
 
+    this.stepBehindPass(dt);
+    if (!REDUCE_MOTION) this.stepSpeedTrail(dt, w, h);
+    this.stepSurfaceRipple(dt, w);
+
     // Puffer-only: rare puff-up behavior.
     if (this.isPuffer) this.stepPuff(dt);
+  }
+
+  // Surface ripples: if the top of the fish gets close to the waterline,
+  // emit a ripple at the sprite's horizontal center. Ripples happen on
+  // entry (immediate) and then at most every ~1.6s while still near.
+  stepSurfaceRipple(dt, w) {
+    if (this.surfaceRippleCooldown > 0) this.surfaceRippleCooldown -= dt;
+    const surfaceY = SURFACE_WATERLINE_PX;
+    const near = this.y < surfaceY + SURFACE_TRIGGER_PX;
+    if (!near) {
+      this._wasNearSurface = false;
+      return;
+    }
+    // Entering the surface band — always pop one ripple. Lingering there
+    // only adds another after the cooldown clears.
+    if (!this._wasNearSurface || this.surfaceRippleCooldown <= 0) {
+      const cx = this.x + w * 0.5;
+      spawnSurfaceRipple(cx);
+      this.surfaceRippleCooldown = 1.4 + Math.random() * 0.6;
+    }
+    this._wasNearSurface = true;
+  }
+
+  // Rare schooling exception: slip behind peers and coral for a moment.
+  // Bottom-dwellers and predators never go behind — they'd just look misplaced.
+  stepBehindPass(dt) {
+    if (this.behindTTL > 0) {
+      this.behindTTL -= dt;
+      if (this.behindTTL <= 0) {
+        this.behindTTL = 0;
+        this.behindCooldown = 30 + this.rand() * 60;
+      }
+      return;
+    }
+    if (this.locomotion === 'predator' || this.locomotion === 'crawler'
+        || this.locomotion === 'walker' || this.locomotion === 'clinger') return;
+    // Only attempt once the fish has fully settled into the school.
+    const settled = (this.layer?.progress || 0) > 0.2;
+    if (!settled) return;
+    this.behindCooldown -= dt;
+    if (this.behindCooldown > 0) return;
+    this.behindCooldown = 18 + this.rand() * 30;
+    // Low probability each attempt — this is the exception, not the rule.
+    if (this.rand() < 0.12) {
+      this.behindTTL = 2.4 + this.rand() * 2.6;
+    }
+  }
+
+  // Fast-moving fish push the water: puff little bubbles at the nose which
+  // then join the ambient rise. Throttled and only triggers above a speed
+  // threshold so the effect lands with scares, chases, and hard turns.
+  stepSpeedTrail(dt, w, h) {
+    this.speedBubbleTimer -= dt;
+    if (this.speedBubbleTimer > 0) return;
+    const speed = Math.hypot(this.vx, this.vy);
+    const threshold = this.baseSpeed * 1.9;
+    if (speed < threshold) {
+      this.speedBubbleTimer = 0.05;
+      return;
+    }
+    // Faster → more frequent. Cap the cadence so we don't spam the DOM.
+    const overshoot = Math.min(1, (speed - threshold) / (this.baseSpeed * 2.2));
+    this.speedBubbleTimer = 0.14 - overshoot * 0.08;
+    this.emitSpeedBubble(w, h);
+  }
+
+  emitSpeedBubble(w, h) {
+    const headOffsetX = this.vx > 0 ? w * 0.88 : w * 0.12;
+    const bx = this.x + headOffsetX;
+    const by = this.y + h * (0.38 + this.rand() * 0.18);
+    const b = document.createElement('div');
+    b.className = 'bubble-pop speed';
+    const size = 3 + this.rand() * 3.5;
+    b.style.width = size + 'px';
+    b.style.height = size + 'px';
+    aq.appendChild(b);
+
+    const start = performance.now();
+    const dur = 700 + this.rand() * 450;
+    // Small lateral kick opposite the travel direction, then it rises.
+    const kickX = (this.vx > 0 ? -1 : 1) * (10 + this.rand() * 14);
+    const driftX = (this.rand() - 0.5) * 18;
+    const riseY = 55 + this.rand() * 35;
+    const step = (now) => {
+      const u = Math.min(1, (now - start) / dur);
+      // Quick kick during the first 25% of life, then steady upward drift.
+      const kickPhase = Math.min(1, u / 0.25);
+      const x = bx + kickX * kickPhase + driftX * u;
+      const y = by - riseY * u;
+      const alpha = u < 0.12 ? u / 0.12 : (1 - (u - 0.12) / 0.88);
+      b.style.transform = `translate(${x}px, ${y}px) scale(${0.7 + u * 0.5})`;
+      b.style.opacity = Math.max(0, alpha);
+      if (u < 1) requestAnimationFrame(step);
+      else b.remove();
+    };
+    requestAnimationFrame(step);
   }
 
   stepPuff(dt) {
@@ -1752,9 +1882,10 @@ class Fish {
   // Graceful exit when the aquarium is reset: pick the nearest horizontal
   // edge and swim off-screen at boosted speed. Once out of view, the fish
   // tears itself down and drops from fishById.
-  departToEdge() {
+  departToEdge({ cull = false } = {}) {
     if (this.departing) return;
     this.departing = true;
+    this._cullOnDepart = cull;
     // Remove from the cinematic pipeline so queued fish don't block the exit.
     const qi = cinematicQueue.indexOf(this);
     if (qi >= 0) cinematicQueue.splice(qi, 1);
@@ -1803,6 +1934,7 @@ class Fish {
     this.updateNameTag(0);
 
     if (this.x < -w - 60 || this.x > W + 60) {
+      if (this._cullOnDepart) culledIds.add(this.id);
       this.destroy();
       fishById.delete(this.id);
     }
@@ -1847,6 +1979,30 @@ aq.appendChild(tankFxFrontLayer);
 const lightBeamPulseEl = document.createElement('div');
 lightBeamPulseEl.className = 'light-beam-pulse';
 tankFxBackLayer.appendChild(lightBeamPulseEl);
+
+// Water-surface ripple layer. The waterline sits 46px below the top of
+// #aquarium — see .surface-waterline in style.css. Ripples spawn along it
+// whenever a fish's top edge crosses within SURFACE_TRIGGER_PX of the
+// waterline. Low-power devices skip ripples (DOM thrash).
+const surfaceRipplesEl = document.getElementById('surfaceRipples');
+const SURFACE_WATERLINE_PX = 46;
+const SURFACE_TRIGGER_PX = 18;
+
+function spawnSurfaceRipple(x) {
+  if (!surfaceRipplesEl || REDUCE_MOTION || DEVICE.lowPower) return;
+  const outer = document.createElement('div');
+  outer.className = 'surface-ripple';
+  outer.style.left = `${x}px`;
+  const inner = document.createElement('div');
+  inner.className = 'surface-ripple inner';
+  inner.style.left = `${x}px`;
+  surfaceRipplesEl.appendChild(outer);
+  surfaceRipplesEl.appendChild(inner);
+  // Ripple animation durations; inner ripple has a delay, so clean up after
+  // the later of the two finishes. Match the CSS timings + a small buffer.
+  setTimeout(() => { outer.remove(); }, 1500);
+  setTimeout(() => { inner.remove(); }, 1500);
+}
 
 const tankEvents = {
   surge: null,
@@ -2138,6 +2294,7 @@ async function poll() {
     if (currentDay && data.day !== currentDay) {
       for (const f of fishById.values()) f.destroy();
       fishById.clear();
+      culledIds.clear();
     }
     currentDay = data.day;
 
@@ -2147,6 +2304,8 @@ async function poll() {
     for (const meta of data.fish) {
       serverIds.add(meta.id);
       if (fishById.has(meta.id)) continue;
+      // Skip fish that were culled locally — they've already swum off.
+      if (culledIds.has(meta.id)) continue;
       const fish = new Fish(meta);
       if (firstLoad || REDUCE_MOTION) {
         // Reduced motion: skip the featured/splash cinematic and drop new
@@ -2176,6 +2335,12 @@ async function poll() {
       }
     }
 
+    // Trim the culled-ids set to just IDs the server still knows about, so
+    // it can't grow without bound across a long-running session.
+    for (const id of culledIds) {
+      if (!serverIds.has(id)) culledIds.delete(id);
+    }
+
     countEl.textContent = `${fishById.size} fish today`;
   } catch (e) {
     console.warn('poll failed', e);
@@ -2184,6 +2349,34 @@ async function poll() {
 
 poll();
 setInterval(poll, POLL_MS);
+
+// Periodic thin-out: every 10 minutes, about half of the tank's school fish
+// swim off the sides and don't come back. Keeps long events from drowning in
+// sprites without having to touch the server-side store.
+function cullHalfSchool() {
+  const eligible = [];
+  for (const f of fishById.values()) {
+    if (f.mode !== 'school') continue;
+    if (f.departing || !f.loaded) continue;
+    eligible.push(f);
+  }
+  if (eligible.length < 2) return;
+  // Fisher-Yates partial shuffle: take the first N after shuffling.
+  for (let i = eligible.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [eligible[i], eligible[j]] = [eligible[j], eligible[i]];
+  }
+  const take = Math.max(1, Math.round(eligible.length * CULL_FRACTION));
+  for (let i = 0; i < take; i++) {
+    // Stagger the exits so the tank doesn't suddenly empty in one frame.
+    const f = eligible[i];
+    setTimeout(() => {
+      if (!fishById.has(f.id) || f.departing) return;
+      f.departToEdge({ cull: true });
+    }, Math.floor(Math.random() * 4000));
+  }
+}
+setInterval(cullHalfSchool, CULL_INTERVAL_MS);
 
 // ---------- Hidden reset hotspot ----------
 const resetBtn = document.getElementById('resetHotspot');
