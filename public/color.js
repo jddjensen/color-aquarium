@@ -607,12 +607,19 @@ async function describeFishArt(dataUrl, fish, userName) {
 }
 
 PALETTE.forEach((c, i) => {
-  const sw = document.createElement('div');
+  const sw = document.createElement('button');
+  sw.type = 'button';
   sw.className = 'swatch' + (i === 0 ? ' active' : '');
   sw.style.background = c;
+  sw.setAttribute('aria-label', `Color ${c}`);
+  sw.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
   sw.addEventListener('click', () => {
-    document.querySelectorAll('.swatch').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.swatch').forEach(s => {
+      s.classList.remove('active');
+      s.setAttribute('aria-pressed', 'false');
+    });
     sw.classList.add('active');
+    sw.setAttribute('aria-pressed', 'true');
     currentColor = c;
   });
   colorsEl.appendChild(sw);
@@ -680,6 +687,17 @@ document.getElementById('undo').addEventListener('click', () => {
   recountMeaningfulDecoration();
 });
 submitBtn?.addEventListener('click', submit);
+
+// Enter on the name field submits the fish (when ready) so guests don't
+// have to hop back to the button after typing — feels natural after iOS
+// auto-dismisses the keyboard.
+const nameInputEl = document.getElementById('fishName');
+nameInputEl?.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  nameInputEl.blur();
+  if (submitBtn && !submitBtn.disabled) submit();
+});
 
 // ---------- Load fish ----------
 function loadFish(fish) {
@@ -1137,15 +1155,18 @@ function opaqueBounds(img) {
   return { minX, minY, maxX, maxY };
 }
 
+let submitInFlight = false;
 async function submit() {
   const btn = submitBtn;
   if (!btn) return;
+  if (submitInFlight) return;
   const nameInput = document.getElementById('fishName');
   const fishName = (nameInput?.value || '').trim().slice(0, 20);
   if (!hasMeaningfulDecoration() && !recountMeaningfulDecoration()) {
     toast('Color your fish first so it is not plain white.');
     return;
   }
+  submitInFlight = true;
   btn.disabled = true;
   const original = btn.textContent;
   btn.textContent = 'Polishing scales...';
@@ -1204,6 +1225,7 @@ async function submit() {
     toast('Oops — could not send your fish. Try again!');
   } finally {
     btn.textContent = original;
+    submitInFlight = false;
     updateSubmitState();
   }
 }

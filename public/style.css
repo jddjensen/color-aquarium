@@ -282,8 +282,11 @@ canvas {
   cursor: pointer;
   min-width: 24px;
   min-height: 24px;
+  padding: 0;
+  font: inherit;
 }
 .swatch.active { box-shadow: 0 0 0 3px #ff7a59; transform: scale(1.1); }
+.swatch:focus-visible { outline: 3px solid #ff7a59; outline-offset: 2px; }
 
 .tool-row { display: flex; gap: .5rem; flex-wrap: wrap; }
 .tool-btn {
@@ -420,6 +423,17 @@ canvas {
 .btn-submit { background: #2bbf5a; color: white; box-shadow: 0 5px 0 #1d8a42; }
 .btn-submit:active { transform: translateY(2px); box-shadow: 0 2px 0 #1d8a42; }
 .btn-submit:disabled { background: #8ecfa2; color: rgba(255,255,255,.92); }
+/* Subtle attention pulse the moment the fish becomes submittable, so kids
+   know the green button is now the next step. Stops after a few cycles so
+   it doesn't keep distracting from coloring. */
+.btn-submit:not(:disabled) { animation: submitReady 1.6s ease-out 3; }
+@keyframes submitReady {
+  0%, 100% { transform: scale(1); box-shadow: 0 5px 0 #1d8a42; }
+  50%      { transform: scale(1.04); box-shadow: 0 7px 18px rgba(43,191,90,.55), 0 5px 0 #1d8a42; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn-submit:not(:disabled) { animation: none; }
+}
 .submit-hint {
   margin: .15rem 0 0;
   text-align: center;
@@ -1342,6 +1356,16 @@ html.is-low-power .fish-wake { display: none; }
   font-weight: 700;
 }
 .aquarium-topbar a { color: #ffd34e; text-decoration: none; }
+#count { display: inline-block; transform-origin: 50% 50%; }
+#count.count-pop { animation: countPop .55s cubic-bezier(.3,1.4,.4,1) 1; }
+@keyframes countPop {
+  0%   { transform: scale(1); }
+  40%  { transform: scale(1.18); color: #ffd34e; }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #count.count-pop { animation: none; }
+}
 .badge-new {
   position: absolute;
   top: -36px; left: 50%;

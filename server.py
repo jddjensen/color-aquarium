@@ -86,8 +86,8 @@ def stable_pick(seed_text: str, options):
     return options[seed % len(options)]
 
 
-def fallback_description(species: str, raw_name: str, seed_text: str = ""):
-    species_label = SPECIES_LABELS.get(species, "Fish")
+def fallback_description(species: str, raw_name: str, seed_text: str = "", supplied_label: str = ""):
+    species_label = SPECIES_LABELS.get(species) or supplied_label or "Fish"
     seed = seed_text or species_label
     starters = ["Bubbles", "Coral", "Sunny", "Ripple", "Pebble", "Comet", "Marble", "Splash"]
     endings = ["Star", "Dash", "Glow", "Flip", "Scout", "Skipper", "Spark", "Drift"]
@@ -120,12 +120,12 @@ def parse_json_object(text: str):
         return None
 
 
-def hf_describe_fish(image_data_url: str, species: str, raw_name: str):
+def hf_describe_fish(image_data_url: str, species: str, raw_name: str, supplied_label: str = ""):
     token = os.environ.get("HF_TOKEN")
     if not token:
         return None
 
-    species_label = SPECIES_LABELS.get(species, species or "Fish")
+    species_label = SPECIES_LABELS.get(species) or supplied_label or species or "Fish"
     model_candidates = []
     preferred = os.environ.get("HF_VISION_MODEL", "").strip()
     if preferred:
@@ -354,8 +354,11 @@ class Handler(BaseHTTPRequestHandler):
             fish_name = sanitize_name(raw_name) if isinstance(raw_name, str) else ""
             raw_species = payload.get("species") if isinstance(payload, dict) else None
             species = normalize_space(raw_species)[:24] if isinstance(raw_species, str) else ""
+            raw_label = payload.get("speciesLabel") if isinstance(payload, dict) else None
+            supplied_label = normalize_space(raw_label)[:40] if isinstance(raw_label, str) else ""
 
-            described = hf_describe_fish(image, species, fish_name) or fallback_description(species, fish_name, image[-256:])
+            described = hf_describe_fish(image, species, fish_name, supplied_label) \
+                or fallback_description(species, fish_name, image[-256:], supplied_label)
             if fish_name:
                 described["nameSuggestion"] = ""
             return self._send_json(200, described)

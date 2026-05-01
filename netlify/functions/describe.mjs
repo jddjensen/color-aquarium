@@ -10,7 +10,17 @@ const SPECIES_LABELS = {
   stingray1: "Sting Ray",
   seaslug1: "Sea Slug",
   shark1: "Shark",
+  octo1: "Octopus",
+  shrimp1: "Shrimp",
+  squid1: "Squid",
+  seastar1: "Sea Star",
 };
+
+function resolveSpeciesLabel(species, suppliedLabel) {
+  if (SPECIES_LABELS[species]) return SPECIES_LABELS[species];
+  const cleaned = String(suppliedLabel || "").replace(/\s+/g, " ").trim().slice(0, 40);
+  return cleaned || "Fish";
+}
 
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
@@ -26,12 +36,19 @@ export default async (req) => {
   if (!image.startsWith("data:image/png;base64,")) {
     return jsonResponse(400, { error: "invalid image" });
   }
+  // Cap describe payloads — the client resizes to ~384px, so a real preview
+  // is well under 1MB. Anything bigger is misuse; reject before forwarding.
+  if (image.length > 2 * 1024 * 1024) {
+    return jsonResponse(413, { error: "too large" });
+  }
 
   const rawName = typeof payload?.name === "string" ? sanitizeName(payload.name) : "";
   const species = typeof payload?.species === "string" ? payload.species.trim().slice(0, 24) : "";
+  const suppliedLabel = typeof payload?.speciesLabel === "string" ? payload.speciesLabel : "";
+  const speciesLabel = resolveSpeciesLabel(species, suppliedLabel);
 
-  const described = await hfDescribeFish(image, species, rawName);
-  const fallback = fallbackDescription(species, rawName, image.slice(-256));
+  const described = await hfDescribeFish(image, speciesLabel, rawName);
+  const fallback = fallbackDescription(speciesLabel, rawName, image.slice(-256));
 
   return jsonResponse(200, {
     nameSuggestion: rawName ? "" : sanitizeName(described?.nameSuggestion || fallback.nameSuggestion || ""),
@@ -57,8 +74,7 @@ function stablePick(seedText, options) {
   return options[seed % options.length];
 }
 
-function fallbackDescription(species, rawName, seedText = "") {
-  const speciesLabel = SPECIES_LABELS[species] || "Fish";
+function fallbackDescription(speciesLabel, rawName, seedText = "") {
   const starters = ["Bubbles", "Coral", "Sunny", "Ripple", "Pebble", "Comet", "Marble", "Splash"];
   const endings = ["Star", "Dash", "Glow", "Flip", "Scout", "Skipper", "Spark", "Drift"];
   const bioTemplates = [
@@ -89,7 +105,7 @@ function parseJsonObject(text) {
   }
 }
 
-async function hfDescribeFish(image, species, rawName) {
+async function hfDescribeFish(image, speciesLabel, rawName) {
   const token = process.env.HF_TOKEN;
   if (!token) return null;
 
@@ -100,7 +116,6 @@ async function hfDescribeFish(image, species, rawName) {
     "Qwen/Qwen2.5-VL-3B-Instruct",
   ].filter(Boolean);
 
-  const speciesLabel = SPECIES_LABELS[species] || species || "Fish";
   const prompt =
     "You write short, delightful aquarium placards for a children's coloring exhibit. " +
     "Return strict JSON only with keys nameSuggestion and bio. " +

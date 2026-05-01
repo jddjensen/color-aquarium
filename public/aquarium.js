@@ -113,8 +113,6 @@ window.addEventListener('pointermove', (e) => {
 window.addEventListener('pointerleave', () => { cursor.active = false; });
 window.addEventListener('blur', () => { cursor.active = false; });
 
-const SPRITE_FACING = { x: -1, y: 0 };
-
 // ---- deterministic pseudo-random from fish id ----
 function hashStr(s) {
   let h = 2166136261 >>> 0;
@@ -449,6 +447,8 @@ class Fish {
     aq.appendChild(this.el);
 
     this.loaded = false;
+    this.imgFailed = false;
+    this.img.addEventListener('error', () => { this.imgFailed = true; });
     this.img.addEventListener('load', () => {
       this.loaded = true;
       this.naturalW = this.img.naturalWidth || 300;
@@ -2445,10 +2445,21 @@ function cinematicAdvance() {
     const fish = cinematicQueue.shift();
     // Drop fish that got removed (day reset, destroyed) before their turn.
     if (!fishById.has(fish.id)) continue;
+    // If the image errored (broken blob, network drop), skip rather than
+    // park forever at the head of the queue and stall every later arrival.
+    if (fish.imgFailed) {
+      fish.cinematicPending = false;
+      fish.startAsSchool();
+      continue;
+    }
     if (!fish.loaded) {
-      // Not loaded yet — put it back and wait for load to retry.
+      // Not loaded yet — put it back and wait for load (or error) to retry.
       cinematicQueue.unshift(fish);
       fish.img.addEventListener('load', scheduleCinematicAdvance, { once: true });
+      fish.img.addEventListener('error', () => {
+        fish.imgFailed = true;
+        scheduleCinematicAdvance();
+      }, { once: true });
       return;
     }
     fish.cinematicPending = false;
@@ -2561,7 +2572,12 @@ async function poll() {
           }
         };
         if (fish.loaded) drop();
-        else fish.img.addEventListener('load', drop, { once: true });
+        else {
+          fish.img.addEventListener('load', drop, { once: true });
+          // If the blob is broken, drop the fish into the school anyway —
+          // its sprite will be invisible but we won't leak a phantom record.
+          fish.img.addEventListener('error', drop, { once: true });
+        }
       } else {
         // Multiple iPads can submit simultaneously — queue arrivals so each
         // fish gets its own cinematic moment instead of colliding.
@@ -2585,7 +2601,19 @@ async function poll() {
       if (!serverIds.has(id)) culledIds.delete(id);
     }
 
-    countEl.textContent = `${fishById.size} fish today`;
+    const newCount = fishById.size;
+    if (countEl.dataset.count !== String(newCount)) {
+      const prev = Number(countEl.dataset.count || '0');
+      countEl.dataset.count = String(newCount);
+      countEl.textContent = `${newCount} fish today`;
+      // Tiny pop only when the number grew — confirms a new arrival reached
+      // the tank. Skip on first paint and on count drops (cull / reset).
+      if (newCount > prev && prev > 0 && !REDUCE_MOTION) {
+        countEl.classList.remove('count-pop');
+        void countEl.offsetWidth;
+        countEl.classList.add('count-pop');
+      }
+    }
   } catch (e) {
     console.warn('poll failed', e);
   }
