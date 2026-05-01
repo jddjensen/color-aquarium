@@ -13,10 +13,20 @@ let currentDay = null;
 
 // Every CULL_INTERVAL_MS, half of the school-mode fish are sent off-screen.
 // Keeps the tank from growing unbounded at an event.
-const CULL_INTERVAL_MS = 10 * 60 * 1000;
+const CULL_INTERVAL_MS = 20 * 60 * 1000;
 const CULL_FRACTION = 0.5;
 // Short polling — guests watch the podium→TV handoff, low latency sells the magic.
 const POLL_MS = 1200;
+// Network resilience tuning. On a flaky venue Wi-Fi the poll request itself
+// can hang or take many seconds. We cap each request, chain (never overlap)
+// polls, and back off after consecutive failures so we don't pile work onto
+// a struggling connection. The tank keeps animating from the last known
+// good snapshot the entire time.
+const POLL_TIMEOUT_MS = 6000;
+const POLL_BACKOFF_MAX_MS = 30 * 1000;
+const FISH_IMG_RETRY_MAX = 4;
+const FISH_IMG_RETRY_BASE_MS = 1500;
+const SNAPSHOT_STORAGE_KEY = 'colorAquarium:lastFish';
 
 // Splash-in timings (ms) for a brand-new fish
 const CINEMATIC_INTRO_MS = 650;   // camera/dim/banner ramp before fish appears
@@ -448,7 +458,22 @@ class Fish {
 
     this.loaded = false;
     this.imgFailed = false;
-    this.img.addEventListener('error', () => { this.imgFailed = true; });
+    this.imgRetries = 0;
+    // Flaky-network retry: a stale CDN edge or dropped packet shouldn't permanently
+    // strand a fish. Reload with a cache-busting query a few times before giving up.
+    this.img.addEventListener('error', () => {
+      if (this.imgRetries < FISH_IMG_RETRY_MAX) {
+        const attempt = ++this.imgRetries;
+        const delay = FISH_IMG_RETRY_BASE_MS * Math.pow(1.7, attempt - 1);
+        setTimeout(() => {
+          if (this.loaded || this.imgFailed) return;
+          const sep = this.url.includes('?') ? '&' : '?';
+          this.img.src = `${this.url}${sep}r=${attempt}`;
+        }, delay);
+        return;
+      }
+      this.imgFailed = true;
+    });
     this.img.addEventListener('load', () => {
       this.loaded = true;
       this.naturalW = this.img.naturalWidth || 300;
@@ -2532,95 +2557,182 @@ function tick(now) {
     }
   }
   advanceTankEvents(now, schoolFish);
-  if (caustics) caustics.render(now);
+  if (caustics) {
+    try { caustics.render(now); } catch (e) { /* swallow GL errors so the tank keeps animating */ }
+  }
   const scene = { nowEpochMs, schoolFish, predators, events: tankEvents, leaderBySpecies };
-  for (const fish of fishById.values()) fish.update(dt, now, scene);
+  // Per-fish try/catch so a single bad sprite or animation step can't kill
+  // the entire animation loop on a kiosk that should run all day.
+  for (const fish of fishById.values()) {
+    try { fish.update(dt, now, scene); } catch (e) { console.warn('fish update failed', fish.id, e); }
+  }
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
 
 // ---------- polling ----------
-async function poll() {
+// Network resilience: one in-flight request at a time (chained, never
+// intervalled), bounded fetch timeout, exponential backoff on failure, and
+// the last good snapshot is persisted so a TV that reloads during an outage
+// still shows the most recent known tank.
+let pollFailures = 0;
+let onlineNotice = null;
+
+function showOfflineNotice() {
+  if (onlineNotice) return;
+  const el = document.createElement('div');
+  el.className = 'offline-notice';
+  el.textContent = 'Reconnecting…';
+  el.setAttribute('aria-live', 'polite');
+  document.body.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('show'));
+  onlineNotice = el;
+}
+
+function hideOfflineNotice() {
+  if (!onlineNotice) return;
+  const el = onlineNotice;
+  onlineNotice = null;
+  el.classList.remove('show');
+  setTimeout(() => el.remove(), 600);
+}
+
+function loadSnapshot() {
   try {
-    const r = await fetch('/api/fish', { cache: 'no-store' });
-    if (!r.ok) return;
-    const data = await r.json();
-
-    if (currentDay && data.day !== currentDay) {
-      for (const f of fishById.values()) f.destroy();
-      fishById.clear();
-      culledIds.clear();
-    }
-    currentDay = data.day;
-
-    const serverIds = new Set();
-    const firstLoad = fishById.size === 0;
-
-    for (const meta of data.fish) {
-      serverIds.add(meta.id);
-      if (fishById.has(meta.id)) continue;
-      // Skip fish that were culled locally — they've already swum off.
-      if (culledIds.has(meta.id)) continue;
-      const fish = new Fish(meta);
-      if (firstLoad || REDUCE_MOTION) {
-        // Reduced motion: skip the featured/splash cinematic and drop new
-        // fish straight into the school. Announce with a gentle name-tag fade.
-        const drop = () => {
-          fish.startAsSchool();
-          if (!firstLoad && fish.nameTag) {
-            fish.nameShowUntil = performance.now() + NAME_SHOW_MS;
-          }
-        };
-        if (fish.loaded) drop();
-        else {
-          fish.img.addEventListener('load', drop, { once: true });
-          // If the blob is broken, drop the fish into the school anyway —
-          // its sprite will be invisible but we won't leak a phantom record.
-          fish.img.addEventListener('error', drop, { once: true });
-        }
-      } else {
-        // Multiple iPads can submit simultaneously — queue arrivals so each
-        // fish gets its own cinematic moment instead of colliding.
-        cinematicRequest(fish);
-      }
-      fishById.set(meta.id, fish);
-    }
-
-    for (const [id, f] of fishById) {
-      if (!serverIds.has(id)) {
-        // Let already-departing fish finish their swim-off animation.
-        if (f.departing) continue;
-        f.destroy();
-        fishById.delete(id);
-      }
-    }
-
-    // Trim the culled-ids set to just IDs the server still knows about, so
-    // it can't grow without bound across a long-running session.
-    for (const id of culledIds) {
-      if (!serverIds.has(id)) culledIds.delete(id);
-    }
-
-    const newCount = fishById.size;
-    if (countEl.dataset.count !== String(newCount)) {
-      const prev = Number(countEl.dataset.count || '0');
-      countEl.dataset.count = String(newCount);
-      countEl.textContent = `${newCount} fish today`;
-      // Tiny pop only when the number grew — confirms a new arrival reached
-      // the tank. Skip on first paint and on count drops (cull / reset).
-      if (newCount > prev && prev > 0 && !REDUCE_MOTION) {
-        countEl.classList.remove('count-pop');
-        void countEl.offsetWidth;
-        countEl.classList.add('count-pop');
-      }
-    }
-  } catch (e) {
-    console.warn('poll failed', e);
+    const raw = localStorage.getItem(SNAPSHOT_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || !Array.isArray(data.fish)) return null;
+    return data;
+  } catch {
+    return null;
   }
 }
 
+function saveSnapshot(data) {
+  try {
+    localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    // Quota / private-mode failures are non-fatal — the tank is still live.
+  }
+}
+
+async function fetchFishWithTimeout() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
+  try {
+    const r = await fetch('/api/fish', { cache: 'no-store', signal: controller.signal });
+    if (!r.ok) throw new Error(`status ${r.status}`);
+    return await r.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function applyFishData(data, { fromCache = false } = {}) {
+  if (currentDay && data.day !== currentDay) {
+    for (const f of fishById.values()) f.destroy();
+    fishById.clear();
+    culledIds.clear();
+  }
+  currentDay = data.day;
+
+  const serverIds = new Set();
+  const firstLoad = fishById.size === 0;
+  // When restoring from a cached snapshot after a reload, drop fish straight
+  // into the school instead of replaying every cinematic — the originals
+  // already had their moment.
+  const skipCinematic = fromCache;
+
+  for (const meta of data.fish) {
+    serverIds.add(meta.id);
+    if (fishById.has(meta.id)) continue;
+    if (culledIds.has(meta.id)) continue;
+    const fish = new Fish(meta);
+    if (firstLoad || REDUCE_MOTION || skipCinematic) {
+      const drop = () => {
+        fish.startAsSchool();
+        if (!firstLoad && !skipCinematic && fish.nameTag) {
+          fish.nameShowUntil = performance.now() + NAME_SHOW_MS;
+        }
+      };
+      if (fish.loaded) drop();
+      else {
+        fish.img.addEventListener('load', drop, { once: true });
+        fish.img.addEventListener('error', drop, { once: true });
+      }
+    } else {
+      cinematicRequest(fish);
+    }
+    fishById.set(meta.id, fish);
+  }
+
+  for (const [id, f] of fishById) {
+    if (!serverIds.has(id)) {
+      if (f.departing) continue;
+      f.destroy();
+      fishById.delete(id);
+    }
+  }
+
+  for (const id of culledIds) {
+    if (!serverIds.has(id)) culledIds.delete(id);
+  }
+
+  const newCount = fishById.size;
+  if (countEl.dataset.count !== String(newCount)) {
+    const prev = Number(countEl.dataset.count || '0');
+    countEl.dataset.count = String(newCount);
+    countEl.textContent = `${newCount} fish today`;
+    if (newCount > prev && prev > 0 && !REDUCE_MOTION) {
+      countEl.classList.remove('count-pop');
+      void countEl.offsetWidth;
+      countEl.classList.add('count-pop');
+    }
+  }
+}
+
+async function poll() {
+  try {
+    const data = await fetchFishWithTimeout();
+    applyFishData(data);
+    saveSnapshot(data);
+    if (pollFailures > 0) hideOfflineNotice();
+    pollFailures = 0;
+  } catch (e) {
+    pollFailures++;
+    // Keep animating the existing tank — never wipe fish on a transient
+    // network failure. Surface a quiet badge after a few consecutive misses
+    // so on-site staff know the link is degraded.
+    if (pollFailures === 3) showOfflineNotice();
+    console.warn('poll failed', pollFailures, e);
+  } finally {
+    // Self-rescheduling chain prevents request pile-up on slow networks.
+    // Backoff: 1.2s healthy, doubling up to 30s during sustained outages.
+    const delay = pollFailures === 0
+      ? POLL_MS
+      : Math.min(POLL_BACKOFF_MAX_MS, POLL_MS * Math.pow(2, pollFailures - 1));
+    setTimeout(poll, delay);
+  }
+}
+
+// Hydrate from the last good snapshot so a reload during an outage still
+// shows fish — even before the first poll lands.
+const cachedSnapshot = loadSnapshot();
+if (cachedSnapshot) {
+  try { applyFishData(cachedSnapshot, { fromCache: true }); }
+  catch (e) { console.warn('snapshot hydrate failed', e); }
+}
 poll();
-setInterval(poll, POLL_MS);
+
+// If the browser tells us we just regained connectivity, retry immediately
+// instead of waiting out the current backoff window.
+window.addEventListener('online', () => {
+  pollFailures = 0;
+  hideOfflineNotice();
+  poll();
+});
+window.addEventListener('offline', showOfflineNotice);
 
 // Periodic thin-out: every 10 minutes, about half of the tank's school fish
 // swim off the sides and don't come back. Keeps long events from drowning in
