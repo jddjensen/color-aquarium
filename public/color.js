@@ -118,7 +118,8 @@ let brushSize = 18;
 let drawing = false;
 let lastPt = null;
 const undoStack = [];
-const UNDO_LIMIT = 25;
+const UNDO_LIMIT = DEVICE.lowPower ? 12 : (DEVICE.isMobile ? 18 : 25);
+let paintRenderPending = false;
 
 // Sparkle / rainbow brush state
 let sparkleHue = 0;
@@ -754,6 +755,19 @@ function applyMask() {
   paintCtx.restore();
 }
 
+function flushPaintRender() {
+  if (!paintRenderPending) return;
+  paintRenderPending = false;
+  applyMask();
+  render();
+}
+
+function schedulePaintRender() {
+  if (paintRenderPending) return;
+  paintRenderPending = true;
+  requestAnimationFrame(flushPaintRender);
+}
+
 function isPaintable(x, y) {
   if (x < 0 || y < 0 || x >= maskCanvas.width || y >= maskCanvas.height) return false;
   const px = maskCtx.getImageData(x | 0, y | 0, 1, 1).data;
@@ -809,8 +823,7 @@ canvas.addEventListener('pointerdown', (ev) => {
     lastPt = p;
     strokeNeedsDecorationRecount = currentStrokeNeedsDecorationRecount();
     emitGlitter(p);
-    applyMask();
-    render();
+    schedulePaintRender();
     return;
   }
   drawing = true;
@@ -818,8 +831,7 @@ canvas.addEventListener('pointerdown', (ev) => {
   strokeNeedsDecorationRecount = currentStrokeNeedsDecorationRecount();
   sparkleHue = (sparkleHue + 17) % 360; // start each stroke at a fresh hue
   strokeAt(p, p);
-  applyMask();
-  render();
+  schedulePaintRender();
 });
 
 canvas.addEventListener('pointermove', (ev) => {
@@ -828,15 +840,19 @@ canvas.addEventListener('pointermove', (ev) => {
     return;
   }
   if (!drawing) return;
-  const p = canvasPoint(ev);
-  if (currentTool === 'glitter') {
-    emitGlitter(p);
-  } else {
-    strokeAt(lastPt, p);
+  const events = typeof ev.getCoalescedEvents === 'function'
+    ? ev.getCoalescedEvents()
+    : [ev];
+  for (const e of events) {
+    const p = canvasPoint(e);
+    if (currentTool === 'glitter') {
+      emitGlitter(p);
+    } else {
+      strokeAt(lastPt, p);
+    }
+    lastPt = p;
   }
-  applyMask();
-  lastPt = p;
-  render();
+  schedulePaintRender();
 });
 
 function endStroke(ev) {
@@ -848,6 +864,7 @@ function endStroke(ev) {
   if (!drawing) return;
   drawing = false;
   lastPt = null;
+  flushPaintRender();
   if (strokeNeedsDecorationRecount) recountMeaningfulDecoration();
   strokeNeedsDecorationRecount = false;
   try { canvas.releasePointerCapture(ev.pointerId); } catch {}
@@ -897,7 +914,9 @@ function emitGlitter(p) {
   // Pure glitter: dense cluster of multi-colored bright dots + star shapes,
   // no base stroke line. Goes wilder than the sparkle brush.
   const radius = brushSize * 1.5;
-  const count = 8 + Math.floor(Math.random() * 8);
+  const baseCount = DEVICE.lowPower ? 5 : 8;
+  const variance = DEVICE.lowPower ? 5 : 8;
+  const count = baseCount + Math.floor(Math.random() * variance);
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
     const r = Math.random() * radius;
@@ -1031,9 +1050,10 @@ function floodFill(x, y, colorHex) {
   if (isLine(startIdx)) return;
 
   const visited = new Uint8Array(w * h);
-  const stack = [[x, y]];
+  const stack = [x, y];
   while (stack.length) {
-    const [cx, cy] = stack.pop();
+    const cy = stack.pop();
+    const cx = stack.pop();
     if (cx < 0 || cy < 0 || cx >= w || cy >= h) continue;
     const p = cy * w + cx;
     if (visited[p]) continue;
@@ -1043,10 +1063,10 @@ function floodFill(x, y, colorHex) {
 
     paint[i] = r; paint[i + 1] = g; paint[i + 2] = b; paint[i + 3] = 255;
 
-    stack.push([cx + 1, cy]);
-    stack.push([cx - 1, cy]);
-    stack.push([cx, cy + 1]);
-    stack.push([cx, cy - 1]);
+    stack.push(cx + 1, cy);
+    stack.push(cx - 1, cy);
+    stack.push(cx, cy + 1);
+    stack.push(cx, cy - 1);
   }
   paintCtx.putImageData(paintImg, 0, 0);
 }
@@ -1054,6 +1074,7 @@ function floodFill(x, y, colorHex) {
 // ---------- Undo ----------
 function pushUndo() {
   try {
+    flushPaintRender();
     const snap = paintCtx.getImageData(0, 0, paintCanvas.width, paintCanvas.height);
     undoStack.push(snap);
     if (undoStack.length > UNDO_LIMIT) undoStack.shift();
@@ -1062,6 +1083,7 @@ function pushUndo() {
 
 // ---------- Submit: export only the fish (transparent paper) ----------
 function exportFishPng() {
+  flushPaintRender();
   const w = canvas.width, h = canvas.height;
 
   // Composite paint + line art onto an offscreen canvas (opaque white bg).

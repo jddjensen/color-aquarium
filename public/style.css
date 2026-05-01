@@ -62,11 +62,12 @@ body.landing {
 
 /* ---------- Color page ---------- */
 body.color {
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   background: linear-gradient(180deg, #cdeffd, #a3d9f5);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* Fish-selection screen (shown first on /color) */
@@ -167,10 +168,12 @@ body.color {
 .coloring-view {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   padding-bottom: env(safe-area-inset-bottom);
   transition: opacity .35s ease;
+  overflow: hidden;
 }
 .coloring-view[hidden] { display: none; }
 .coloring-view.entering { opacity: 0; }
@@ -188,11 +191,14 @@ body.color {
 .link-btn:hover { text-decoration: underline; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
+  flex: 0 0 auto;
   padding: calc(.75rem + env(safe-area-inset-top)) calc(1rem + env(safe-area-inset-right))
            .75rem calc(1rem + env(safe-area-inset-left));
   background: #0a3d62; color: white;
+  gap: .75rem;
 }
 .topbar h1 { margin: 0; font-size: 1.25rem; }
+.topbar .link-btn { flex: 0 0 auto; }
 .topbar a { color: #ffd34e; text-decoration: none; font-weight: 700; }
 
 .picker { display: flex; gap: .5rem; padding: .75rem 1rem; overflow-x: auto; background: rgba(255,255,255,.6); }
@@ -209,64 +215,21 @@ body.color {
 
 .workspace {
   flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 1fr 220px;
+  grid-template-columns: minmax(0, 1fr) 220px;
   gap: 1rem;
   padding: 1rem;
+  overflow: hidden;
 }
 @media (max-width: 800px) {
   .workspace {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
     gap: .6rem;
     padding: .6rem;
   }
 }
-/* Phone portrait: compact tool panels, chunky tap targets, scrollable tool row. */
-@media (max-width: 560px) {
-  .workspace { padding: .4rem; gap: .4rem; }
-  .canvas-wrap { padding: 6px; min-height: 0; border-radius: 12px; }
-  .panel { padding: .55rem; border-radius: 12px; }
-  .panel h3 { font-size: .92rem; margin-bottom: .35rem; }
-  .colors {
-    grid-template-columns: repeat(8, 1fr);
-    gap: 4px;
-    max-height: 150px;
-  }
-  .tool-row {
-    /* Let the tool buttons scroll horizontally so all six always fit. */
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding-bottom: 2px;
-  }
-  .tool-row::-webkit-scrollbar { display: none; }
-  .tool-btn {
-    flex: 0 0 auto;
-    min-width: 74px;
-    padding: .55rem .7rem;
-    font-size: .88rem;
-  }
-  .stickers { grid-template-columns: repeat(5, 1fr); gap: 6px; }
-  .actions button { padding: .9rem 1rem; font-size: 1rem; }
-  .actions input[type="text"] { padding: .8rem .9rem; }
-}
-/* Landscape phones: stretch the canvas side-by-side with a compact tool rail. */
-@media (max-width: 920px) and (orientation: landscape) and (max-height: 540px) {
-  .workspace {
-    grid-template-columns: 1fr 180px;
-    gap: .5rem;
-    padding: .4rem;
-  }
-  .tools { gap: .4rem; }
-  .panel { padding: .45rem; }
-  .colors { grid-template-columns: repeat(4, 1fr); max-height: 120px; }
-  .tool-btn { padding: .4rem; font-size: .8rem; }
-  .stickers { grid-template-columns: repeat(3, 1fr); gap: 5px; }
-  .topbar { padding: .35rem .75rem; }
-  .topbar h1 { font-size: 1rem; }
-}
-
 .canvas-wrap {
   background: white;
   border-radius: 16px;
@@ -276,9 +239,11 @@ body.color {
   padding: 12px;
   overflow: hidden;
   min-height: 300px;
+  min-width: 0;
 }
 canvas {
   max-width: 100%;
+  max-height: 100%;
   height: auto;
   display: block;
   /* touch-action: none keeps iOS from hijacking single-finger drags for scroll
@@ -292,7 +257,7 @@ canvas {
   cursor: crosshair;
 }
 
-.tools { display: flex; flex-direction: column; gap: .75rem; }
+.tools { display: flex; flex-direction: column; gap: .75rem; min-height: 0; }
 .panel {
   background: white;
   border-radius: 14px;
@@ -315,6 +280,8 @@ canvas {
   border: 2px solid white;
   box-shadow: 0 0 0 1px rgba(0,0,0,.12);
   cursor: pointer;
+  min-width: 24px;
+  min-height: 24px;
 }
 .swatch.active { box-shadow: 0 0 0 3px #ff7a59; transform: scale(1.1); }
 
@@ -322,6 +289,7 @@ canvas {
 .tool-btn {
   flex: 1; padding: .6rem; border-radius: 10px; border: 2px solid #0a3d62; background: white; color: #0a3d62;
   font-weight: 700; cursor: pointer; font-size: .95rem;
+  min-height: 42px;
 }
 .tool-btn.active { background: #0a3d62; color: white; }
 .size-row input { width: 100%; }
@@ -471,6 +439,141 @@ canvas {
   z-index: 100;
 }
 .toast.show { opacity: 1; }
+
+/* Final mobile coloring overrides. These live after the base control rules so
+   the compact phone layout wins the cascade. */
+@media (max-width: 560px) {
+  .topbar {
+    padding: calc(.5rem + env(safe-area-inset-top)) .7rem .5rem;
+  }
+  .topbar h1 {
+    font-size: 1rem;
+    white-space: nowrap;
+  }
+  .link-btn { font-size: .9rem; }
+  .workspace {
+    grid-template-rows: auto minmax(0, 1fr);
+    padding: .45rem;
+    gap: .45rem;
+  }
+  .canvas-wrap {
+    padding: 6px;
+    min-height: 0;
+    border-radius: 12px;
+  }
+  body.color .canvas-wrap > canvas {
+    width: auto !important;
+    height: 100% !important;
+    max-width: 100%;
+    max-height: 100%;
+  }
+  .tools {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: .45rem;
+    max-height: none;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    padding: 1px 2px calc(.25rem + env(safe-area-inset-bottom));
+    scrollbar-width: thin;
+  }
+  .panel {
+    padding: .55rem;
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,.07);
+  }
+  .panel h3 { font-size: .85rem; margin-bottom: .35rem; }
+  .colors {
+    grid-template-columns: repeat(10, minmax(24px, 1fr));
+    gap: 4px;
+    max-height: none;
+    overflow: visible;
+  }
+  .tool-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .tool-btn {
+    min-width: 0;
+    min-height: 42px;
+    padding: .45rem .35rem;
+    font-size: .84rem;
+  }
+  .stickers { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+  .size-row label { font-size: .88rem; }
+  .actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .45rem;
+  }
+  .actions input[type="text"],
+  .actions .btn-submit,
+  .actions .submit-hint {
+    grid-column: 1 / -1;
+  }
+  .actions .btn-submit { order: -2; }
+  .actions .submit-hint { order: -1; }
+  .actions button {
+    min-height: 44px;
+    padding: .78rem .75rem;
+    font-size: .95rem;
+  }
+  .actions input[type="text"] { padding: .75rem .85rem; }
+  .submit-hint { font-size: .82rem; line-height: 1.2; }
+}
+
+@media (max-width: 920px) and (orientation: landscape) and (max-height: 540px) {
+  .workspace {
+    grid-template-columns: minmax(0, 1fr) 190px;
+    grid-template-rows: minmax(0, 1fr);
+    gap: .5rem;
+    padding: .4rem;
+  }
+  .canvas-wrap { min-height: 0; padding: 6px; }
+  body.color .canvas-wrap > canvas {
+    width: auto !important;
+    height: 100% !important;
+    max-width: 100%;
+    max-height: 100%;
+  }
+  .tools {
+    gap: .4rem;
+    max-height: none;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-right: 2px;
+  }
+  .panel { padding: .45rem; border-radius: 10px; }
+  .panel h3 { font-size: .78rem; margin-bottom: .3rem; }
+  .colors {
+    grid-template-columns: repeat(5, minmax(24px, 1fr));
+    max-height: none;
+    overflow: visible;
+  }
+  .tool-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 5px; }
+  .tool-btn { min-height: 34px; padding: .35rem; font-size: .76rem; }
+  .stickers { grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  .topbar { padding: .35rem .75rem; }
+  .topbar h1 { font-size: 1rem; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; }
+  .actions input[type="text"],
+  .actions .btn-submit,
+  .actions .submit-hint { grid-column: 1 / -1; }
+  .actions .btn-submit { order: -2; }
+  .actions .submit-hint { order: -1; }
+  .actions button { min-height: 34px; padding: .45rem; font-size: .82rem; }
+  .actions input[type="text"] { padding: .5rem .6rem; }
+}
+
+@media (max-width: 920px) and (orientation: landscape) and (max-height: 540px) {
+  body.color #canvas {
+    width: auto !important;
+    height: calc(100dvh - 58px) !important;
+    max-width: 100%;
+  }
+}
 
 /* ---------- Aquarium page ---------- */
 body.aquarium {
