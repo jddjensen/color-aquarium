@@ -603,7 +603,7 @@ body.aquarium {
 }
 #aquarium {
   position: fixed; inset: 0;
-  background: url('/assets/Background.png') center/cover no-repeat;
+  background: #001018 url('/assets/Background.jpg') center/cover no-repeat;
   overflow: hidden;
   transition: transform 1.4s cubic-bezier(.22,.8,.32,1), filter 90s linear;
   will-change: transform, filter;

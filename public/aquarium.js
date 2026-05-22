@@ -15,8 +15,11 @@ let currentDay = null;
 // Keeps the tank from growing unbounded at an event.
 const CULL_INTERVAL_MS = 20 * 60 * 1000;
 const CULL_FRACTION = 0.5;
-// Short polling — guests watch the podium→TV handoff, low latency sells the magic.
+// Short polling - guests watch the podium-to-TV handoff, low latency sells the
+// magic. On constrained connections we relax this a bit so the display does
+// less background traffic and leaves room for image downloads.
 const POLL_MS = 1200;
+const SLOW_POLL_MS = 3500;
 // Network resilience tuning. On a flaky venue Wi-Fi the poll request itself
 // can hang or take many seconds. We cap each request, chain (never overlap)
 // polls, and back off after consecutive failures so we don't pile work onto
@@ -26,7 +29,30 @@ const POLL_TIMEOUT_MS = 6000;
 const POLL_BACKOFF_MAX_MS = 30 * 1000;
 const FISH_IMG_RETRY_MAX = 4;
 const FISH_IMG_RETRY_BASE_MS = 1500;
+const FISH_IMG_CONCURRENCY = 3;
+const FISH_IMG_CONSTRAINED_CONCURRENCY = 1;
+const FISH_IMG_START_GAP_MS = 90;
+const FISH_IMG_CONSTRAINED_START_GAP_MS = 850;
+const FISH_IMAGE_FAILED_EVENT = 'fish-image-failed';
 const SNAPSHOT_STORAGE_KEY = 'colorAquarium:lastFish';
+
+const DISPLAY_PARAMS = new URLSearchParams(window.location.search);
+const FORCE_CONSTRAINED_CONNECTION = DISPLAY_PARAMS.has('lowBandwidth') || DISPLAY_PARAMS.has('slowNetwork');
+const CONNECTION = navigator.connection || navigator.mozConnection || navigator.webkitConnection || null;
+function connectionLooksConstrained() {
+  if (FORCE_CONSTRAINED_CONNECTION) return true;
+  if (!CONNECTION) return false;
+  const type = String(CONNECTION.effectiveType || '').toLowerCase();
+  if (CONNECTION.saveData) return true;
+  if (type === 'slow-2g' || type === '2g') return true;
+  return Number(CONNECTION.downlink) > 0 && Number(CONNECTION.downlink) <= 1.5;
+}
+function currentPollMs() {
+  return connectionLooksConstrained() ? SLOW_POLL_MS : POLL_MS;
+}
+function currentBackoffMaxMs() {
+  return connectionLooksConstrained() ? 60 * 1000 : POLL_BACKOFF_MAX_MS;
+}
 
 // Splash-in timings (ms) for a brand-new fish
 const CINEMATIC_INTRO_MS = 650;   // camera/dim/banner ramp before fish appears
@@ -392,6 +418,93 @@ function initCaustics(canvas) {
 const caustics = DEVICE.lowPower ? (causticsCanvas?.classList.add('caustics-fallback'), null)
                                  : initCaustics(causticsCanvas);
 
+// Submitted fish images can be much larger than the rendered sprite. On slow
+// venue Wi-Fi, starting every image download at once can starve the live poll
+// and make new arrivals feel stuck. This tiny queue keeps bandwidth usage
+// steady, while cinematic arrivals can jump to the front.
+const fishImageQueue = [];
+let fishImageActive = 0;
+let fishImagePumpTimer = null;
+let lastFishImageStartAt = -Infinity;
+
+function fishImageConcurrencyLimit() {
+  if (connectionLooksConstrained()) return FISH_IMG_CONSTRAINED_CONCURRENCY;
+  return DEVICE.lowPower ? 2 : FISH_IMG_CONCURRENCY;
+}
+
+function fishImageStartGapMs() {
+  if (connectionLooksConstrained()) return FISH_IMG_CONSTRAINED_START_GAP_MS;
+  return DEVICE.lowPower ? 250 : FISH_IMG_START_GAP_MS;
+}
+
+function queueFishImageLoad(fish, { priority = false } = {}) {
+  if (fish.destroyed || fish.loaded || fish.imgFailed || fish.imageLoadStarted) return;
+  const existing = fishImageQueue.indexOf(fish);
+  if (existing >= 0) {
+    if (priority && existing > 0) {
+      fishImageQueue.splice(existing, 1);
+      fishImageQueue.unshift(fish);
+    }
+    return;
+  }
+  if (priority) fishImageQueue.unshift(fish);
+  else fishImageQueue.push(fish);
+  scheduleFishImageQueuePump(0);
+}
+
+function scheduleFishImageQueuePump(delay = 0) {
+  if (fishImagePumpTimer !== null) return;
+  fishImagePumpTimer = setTimeout(() => {
+    fishImagePumpTimer = null;
+    pumpFishImageQueue();
+  }, delay);
+}
+
+function pumpFishImageQueue() {
+  if (fishImageActive >= fishImageConcurrencyLimit()) return;
+  const wait = Math.max(0, fishImageStartGapMs() - (performance.now() - lastFishImageStartAt));
+  if (wait > 0) {
+    scheduleFishImageQueuePump(wait);
+    return;
+  }
+
+  while (fishImageQueue.length && fishImageActive < fishImageConcurrencyLimit()) {
+    const fish = fishImageQueue.shift();
+    if (!fish || fish.destroyed || fish.loaded || fish.imgFailed || fish.imageLoadStarted) continue;
+    fishImageActive++;
+    fish._imageQueueActive = true;
+    fish.imageLoadStarted = true;
+    lastFishImageStartAt = performance.now();
+    fish.startImageLoad();
+    if (fishImageQueue.length && fishImageActive < fishImageConcurrencyLimit()) {
+      scheduleFishImageQueuePump(fishImageStartGapMs());
+    }
+    return;
+  }
+}
+
+function finishFishImageLoad(fish) {
+  if (fish._imageQueueActive) {
+    fish._imageQueueActive = false;
+    fishImageActive = Math.max(0, fishImageActive - 1);
+  }
+  if (fishImageQueue.length) scheduleFishImageQueuePump(0);
+}
+
+function cancelFishImageLoad(fish) {
+  const queued = fishImageQueue.indexOf(fish);
+  if (queued >= 0) fishImageQueue.splice(queued, 1);
+  if (fish._imageQueueActive) {
+    fish._imageQueueActive = false;
+    fishImageActive = Math.max(0, fishImageActive - 1);
+  }
+  if (!fish.loaded && fish.imageLoadStarted) {
+    fish.img.removeAttribute('src');
+    if (fish.shadowEl) fish.shadowEl.removeAttribute('src');
+  }
+  if (fishImageQueue.length) scheduleFishImageQueuePump(0);
+}
+
 class Fish {
   constructor(meta) {
     this.id = meta.id;
@@ -439,8 +552,10 @@ class Fish {
     this.wiggleEl = document.createElement('div');
     this.wiggleEl.className = 'fish-wiggle';
     this.img = document.createElement('img');
-    this.img.src = this.url;
     this.img.alt = 'fish';
+    this.img.decoding = 'async';
+    this.img.loading = 'eager';
+    this.img.fetchPriority = 'auto';
     this.img.draggable = false;
     this.wiggleEl.appendChild(this.img);
     this.pitchEl.appendChild(this.wiggleEl);
@@ -448,8 +563,9 @@ class Fish {
     this.el.appendChild(this.flipEl);
     this.shadowEl = document.createElement('img');
     this.shadowEl.className = 'fish-shadow';
-    this.shadowEl.src = this.url;
     this.shadowEl.alt = '';
+    this.shadowEl.decoding = 'async';
+    this.shadowEl.loading = 'eager';
     this.shadowEl.draggable = false;
     this.shadowEl.setAttribute('aria-hidden', 'true');
     this.shadowEl.style.opacity = '0';
@@ -459,25 +575,33 @@ class Fish {
     this.loaded = false;
     this.imgFailed = false;
     this.imgRetries = 0;
+    this.imageLoadStarted = false;
+    this._imageQueueActive = false;
+    this.destroyed = false;
     // Flaky-network retry: a stale CDN edge or dropped packet shouldn't permanently
     // strand a fish. Reload with a cache-busting query a few times before giving up.
     this.img.addEventListener('error', () => {
+      if (this.destroyed || this.loaded || this.imgFailed || !this.imageLoadStarted) return;
       if (this.imgRetries < FISH_IMG_RETRY_MAX) {
         const attempt = ++this.imgRetries;
         const delay = FISH_IMG_RETRY_BASE_MS * Math.pow(1.7, attempt - 1);
         setTimeout(() => {
-          if (this.loaded || this.imgFailed) return;
+          if (this.destroyed || this.loaded || this.imgFailed) return;
           const sep = this.url.includes('?') ? '&' : '?';
           this.img.src = `${this.url}${sep}r=${attempt}`;
         }, delay);
         return;
       }
       this.imgFailed = true;
+      this.img.dispatchEvent(new CustomEvent(FISH_IMAGE_FAILED_EVENT));
+      finishFishImageLoad(this);
     });
     this.img.addEventListener('load', () => {
+      if (this.destroyed || this.loaded) return;
       this.loaded = true;
       this.naturalW = this.img.naturalWidth || 300;
       this.naturalH = this.img.naturalHeight || 200;
+      this.shadowEl.src = this.img.currentSrc || this.img.src;
       if (this.naturalH > this.naturalW * 1.15) {
         this.isSeahorse = true;
         this.wiggleAmpBase *= 0.35;
@@ -486,6 +610,7 @@ class Fish {
       // Species-trait wiggle overrides (applied after seahorse-by-aspect detection).
       if (this.traits.ampMul !== undefined) this.wiggleAmpBase *= this.traits.ampMul;
       if (this.traits.freqMul !== undefined) this.wiggleBase *= this.traits.freqMul;
+      finishFishImageLoad(this);
     });
 
     this.mode = 'featured';
@@ -608,6 +733,28 @@ class Fish {
 
     // ---- Wake distortion element (created on demand when a fish goes fast) ----
     this.wakeEl = null;
+  }
+
+  requestImageLoad(options) {
+    queueFishImageLoad(this, options);
+  }
+
+  startImageLoad() {
+    if (this.destroyed || this.loaded || this.imgFailed) {
+      finishFishImageLoad(this);
+      return;
+    }
+    this.img.fetchPriority = this.cinematicPending ? 'high' : 'auto';
+    this.img.src = this.url;
+  }
+
+  onImageSettled(callback) {
+    if (this.loaded || this.imgFailed) {
+      callback();
+      return;
+    }
+    this.img.addEventListener('load', callback, { once: true });
+    this.img.addEventListener(FISH_IMAGE_FAILED_EVENT, callback, { once: true });
   }
 
   startAsSchool() {
@@ -2187,6 +2334,8 @@ class Fish {
   }
 
   destroy() {
+    this.destroyed = true;
+    cancelFishImageLoad(this);
     cinematicEnd(this);
     if (this._settleTimer) { clearTimeout(this._settleTimer); this._settleTimer = null; }
     this.clearArrivalFx();
@@ -2451,6 +2600,7 @@ const MIN_CINEMATIC_GAP_MS = 2500;
 
 function cinematicRequest(fish) {
   fish.cinematicPending = true;
+  fish.requestImageLoad({ priority: true });
   cinematicQueue.push(fish);
   scheduleCinematicAdvance();
 }
@@ -2478,13 +2628,11 @@ function cinematicAdvance() {
       continue;
     }
     if (!fish.loaded) {
-      // Not loaded yet — put it back and wait for load (or error) to retry.
+      // Not loaded yet - put it back and wait for load (or permanent image
+      // failure) to retry.
       cinematicQueue.unshift(fish);
-      fish.img.addEventListener('load', scheduleCinematicAdvance, { once: true });
-      fish.img.addEventListener('error', () => {
-        fish.imgFailed = true;
-        scheduleCinematicAdvance();
-      }, { once: true });
+      fish.requestImageLoad({ priority: true });
+      fish.onImageSettled(scheduleCinematicAdvance);
       return;
     }
     fish.cinematicPending = false;
@@ -2577,6 +2725,10 @@ requestAnimationFrame(tick);
 // still shows the most recent known tank.
 let pollFailures = 0;
 let onlineNotice = null;
+let lastFishEtag = null;
+let pollTimer = null;
+let pollInFlight = false;
+let pollAgainAfterFlight = false;
 
 function showOfflineNotice() {
   if (onlineNotice) return;
@@ -2603,6 +2755,7 @@ function loadSnapshot() {
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (!data || typeof data !== 'object' || !Array.isArray(data.fish)) return null;
+    if (typeof data.etag === 'string') lastFishEtag = data.etag;
     return data;
   } catch {
     return null;
@@ -2611,7 +2764,8 @@ function loadSnapshot() {
 
 function saveSnapshot(data) {
   try {
-    localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(data));
+    const snapshot = lastFishEtag ? { ...data, etag: lastFishEtag } : data;
+    localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
   } catch {
     // Quota / private-mode failures are non-fatal — the tank is still live.
   }
@@ -2621,9 +2775,14 @@ async function fetchFishWithTimeout() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), POLL_TIMEOUT_MS);
   try {
-    const r = await fetch('/api/fish', { cache: 'no-store', signal: controller.signal });
+    const headers = lastFishEtag ? { 'If-None-Match': lastFishEtag } : {};
+    const r = await fetch('/api/fish', { cache: 'no-cache', signal: controller.signal, headers });
+    if (r.status === 304) return { unchanged: true };
     if (!r.ok) throw new Error(`status ${r.status}`);
-    return await r.json();
+    const data = await r.json();
+    const etag = r.headers.get('ETag');
+    lastFishEtag = etag || null;
+    return { unchanged: false, data };
   } finally {
     clearTimeout(timer);
   }
@@ -2649,6 +2808,8 @@ function applyFishData(data, { fromCache = false } = {}) {
     if (fishById.has(meta.id)) continue;
     if (culledIds.has(meta.id)) continue;
     const fish = new Fish(meta);
+    fishById.set(meta.id, fish);
+    fish.requestImageLoad({ priority: !firstLoad && !skipCinematic });
     if (firstLoad || REDUCE_MOTION || skipCinematic) {
       const drop = () => {
         fish.startAsSchool();
@@ -2657,14 +2818,10 @@ function applyFishData(data, { fromCache = false } = {}) {
         }
       };
       if (fish.loaded) drop();
-      else {
-        fish.img.addEventListener('load', drop, { once: true });
-        fish.img.addEventListener('error', drop, { once: true });
-      }
+      else fish.onImageSettled(drop);
     } else {
       cinematicRequest(fish);
     }
-    fishById.set(meta.id, fish);
   }
 
   for (const [id, f] of fishById) {
@@ -2693,10 +2850,21 @@ function applyFishData(data, { fromCache = false } = {}) {
 }
 
 async function poll() {
+  if (pollTimer !== null) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  if (pollInFlight) {
+    pollAgainAfterFlight = true;
+    return;
+  }
+  pollInFlight = true;
   try {
-    const data = await fetchFishWithTimeout();
-    applyFishData(data);
-    saveSnapshot(data);
+    const result = await fetchFishWithTimeout();
+    if (!result.unchanged) {
+      applyFishData(result.data);
+      saveSnapshot(result.data);
+    }
     if (pollFailures > 0) hideOfflineNotice();
     pollFailures = 0;
   } catch (e) {
@@ -2707,13 +2875,23 @@ async function poll() {
     if (pollFailures === 3) showOfflineNotice();
     console.warn('poll failed', pollFailures, e);
   } finally {
+    pollInFlight = false;
     // Self-rescheduling chain prevents request pile-up on slow networks.
-    // Backoff: 1.2s healthy, doubling up to 30s during sustained outages.
-    const delay = pollFailures === 0
-      ? POLL_MS
-      : Math.min(POLL_BACKOFF_MAX_MS, POLL_MS * Math.pow(2, pollFailures - 1));
-    setTimeout(poll, delay);
+    // Backoff: short while healthy, doubling during sustained outages.
+    const delay = pollAgainAfterFlight ? 0 : (pollFailures === 0
+      ? currentPollMs()
+      : Math.min(currentBackoffMaxMs(), currentPollMs() * Math.pow(2, pollFailures - 1)));
+    pollAgainAfterFlight = false;
+    schedulePoll(delay);
   }
+}
+
+function schedulePoll(delay) {
+  if (pollTimer !== null) clearTimeout(pollTimer);
+  pollTimer = setTimeout(() => {
+    pollTimer = null;
+    poll();
+  }, delay);
 }
 
 // Hydrate from the last good snapshot so a reload during an outage still
@@ -2723,16 +2901,22 @@ if (cachedSnapshot) {
   try { applyFishData(cachedSnapshot, { fromCache: true }); }
   catch (e) { console.warn('snapshot hydrate failed', e); }
 }
-poll();
+schedulePoll(0);
 
 // If the browser tells us we just regained connectivity, retry immediately
 // instead of waiting out the current backoff window.
 window.addEventListener('online', () => {
   pollFailures = 0;
   hideOfflineNotice();
-  poll();
+  schedulePoll(0);
 });
 window.addEventListener('offline', showOfflineNotice);
+if (CONNECTION && CONNECTION.addEventListener) {
+  CONNECTION.addEventListener('change', () => {
+    scheduleFishImageQueuePump(0);
+    schedulePoll(0);
+  });
+}
 
 // Periodic thin-out: every 10 minutes, about half of the tank's school fish
 // swim off the sides and don't come back. Keeps long events from drowning in

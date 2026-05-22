@@ -1,10 +1,11 @@
 import { getStore } from "@netlify/blobs";
+import { createHash } from "node:crypto";
 
 // GET /api/fish  — returns today's fish list. Opportunistically purges older-day
 // blobs so the store doesn't accumulate across days. Purge runs on ~10% of polls
 // to keep function duration down; within ~15 seconds of the day rolling over,
 // stale data is gone.
-export default async () => {
+export default async (req) => {
   const day = todayKey();
   // Strong consistency — otherwise list() can lag new submissions by 10–60 s.
   const store = getStore({ name: "fish", consistency: "strong" });
@@ -55,12 +56,40 @@ export default async () => {
   );
 
   results.sort((a, b) => a.createdAt - b.createdAt);
+  const etag = makeEtag(day, results);
+  if (etagMatches(req?.headers?.get("if-none-match"), etag)) {
+    return new Response(null, {
+      status: 304,
+      headers: {
+        "ETag": etag,
+        "Cache-Control": "no-cache",
+      },
+    });
+  }
 
   return new Response(JSON.stringify({ day, fish: results }), {
     status: 200,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "ETag": etag,
+    },
   });
 };
+
+function makeEtag(day, results) {
+  const hash = createHash("sha1")
+    .update(JSON.stringify([day, results]))
+    .digest("base64url")
+    .slice(0, 24);
+  return `"fish-${hash}"`;
+}
+
+function etagMatches(header, etag) {
+  if (!header) return false;
+  if (header.trim() === "*") return true;
+  return header.split(",").map((value) => value.trim()).includes(etag);
+}
 
 async function purgeOldDays(store, today) {
   const { blobs } = await store.list();

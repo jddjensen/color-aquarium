@@ -23,8 +23,9 @@ export default async (req) => {
     status: 200,
     headers: {
       "Content-Type": "image/png",
-      // Submissions are immutable once saved; safe to cache for a while.
-      "Cache-Control": "public, max-age=300",
+      // Submissions are immutable once saved; TVs should never re-download
+      // already-seen fish during a flaky event connection.
+      "Cache-Control": "public, max-age=31536000, immutable",
     },
   });
 };
