@@ -1,5 +1,6 @@
 import { getStore } from "@netlify/blobs";
 import { createHash } from "node:crypto";
+import { todayKey } from "./_shared.mjs";
 
 // GET /api/fish  — returns today's fish list. Opportunistically purges older-day
 // blobs so the store doesn't accumulate across days. Purge runs on ~10% of polls
@@ -103,15 +104,6 @@ async function purgeOldDays(store, today) {
   for (let i = 0; i < stale.length; i += BATCH) {
     await Promise.all(stale.slice(i, i + BATCH).map((k) => store.delete(k)));
   }
-}
-
-function todayKey() {
-  // Local time; respects TZ env var configured in Netlify site settings.
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
 }
 
 export const config = { path: "/api/fish" };

@@ -1,13 +1,11 @@
 import { getStore } from "@netlify/blobs";
+import { isSameOrigin, jsonResponse, todayKey } from "./_shared.mjs";
 
 // POST /api/reset  — wipes today's fish (used by the hidden aquarium hotspot).
 export default async (req) => {
-  if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "method not allowed" }), {
-      status: 405,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+  if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
+  if (!isSameOrigin(req)) return jsonResponse(403, { error: "cross-origin blocked" });
+
   const day = todayKey();
   const store = getStore({ name: "fish", consistency: "strong" });
   const { blobs } = await store.list({ prefix: `${day}/` });
@@ -15,18 +13,7 @@ export default async (req) => {
   for (let i = 0; i < blobs.length; i += BATCH) {
     await Promise.all(blobs.slice(i, i + BATCH).map((b) => store.delete(b.key)));
   }
-  return new Response(JSON.stringify({ ok: true, day }), {
-    status: 200,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
-  });
+  return jsonResponse(200, { ok: true, day });
 };
-
-function todayKey() {
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
 
 export const config = { path: "/api/reset" };

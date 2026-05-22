@@ -11,9 +11,8 @@ const fishById = new Map();
 const culledIds = new Set();
 let currentDay = null;
 
-// Every CULL_INTERVAL_MS, half of the school-mode fish are sent off-screen.
-// Keeps the tank from growing unbounded at an event.
-const CULL_INTERVAL_MS = 20 * 60 * 1000;
+// At the top of every wall-clock hour, half of the school-mode fish are sent
+// off-screen. Keeps the tank from growing unbounded at an event.
 const CULL_FRACTION = 0.5;
 // Short polling - guests watch the podium-to-TV handoff, low latency sells the
 // magic. On constrained connections we relax this a bit so the display does
@@ -2918,9 +2917,9 @@ if (CONNECTION && CONNECTION.addEventListener) {
   });
 }
 
-// Periodic thin-out: every 10 minutes, about half of the tank's school fish
-// swim off the sides and don't come back. Keeps long events from drowning in
-// sprites without having to touch the server-side store.
+// Periodic thin-out: at the top of every wall-clock hour, about half of the
+// tank's school fish swim off the sides and don't come back. Keeps long events
+// from drowning in sprites without having to touch the server-side store.
 function cullHalfSchool() {
   const eligible = [];
   for (const f of fishById.values()) {
@@ -2944,7 +2943,18 @@ function cullHalfSchool() {
     }, Math.floor(Math.random() * 4000));
   }
 }
-setInterval(cullHalfSchool, CULL_INTERVAL_MS);
+// Re-target the next absolute top-of-hour each time, so the schedule doesn't
+// drift across sleep/wake or DST changes.
+function scheduleNextHourlyCull() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(now.getHours() + 1, 0, 0, 0);
+  setTimeout(() => {
+    cullHalfSchool();
+    scheduleNextHourlyCull();
+  }, next.getTime() - now.getTime());
+}
+scheduleNextHourlyCull();
 
 // ---------- Hidden reset hotspot ----------
 const resetBtn = document.getElementById('resetHotspot');

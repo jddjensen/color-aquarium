@@ -301,7 +301,12 @@ FISH.forEach((f) => {
   card.type = 'button';
   card.className = 'fish-card';
   card.dataset.fishId = f.id;
-  card.innerHTML = `<img src="${f.src}" alt="${f.label}" /><span>${f.label}</span>`;
+  const img = document.createElement('img');
+  img.src = f.src;
+  img.alt = f.label;
+  const label = document.createElement('span');
+  label.textContent = f.label;
+  card.append(img, label);
   card.addEventListener('click', () => {
     document.querySelectorAll('.fish-card').forEach((c) => c.classList.remove('active'));
     card.classList.add('active');
@@ -582,6 +587,8 @@ function sanitizeBio(value) {
 }
 
 async function describeFishArt(dataUrl, fish, userName) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
   try {
     const previewDataUrl = await resizeDataUrl(dataUrl, 384);
     const r = await fetch('/api/describe', {
@@ -593,6 +600,7 @@ async function describeFishArt(dataUrl, fish, userName) {
         speciesLabel: fish.label,
         name: userName,
       }),
+      signal: controller.signal,
     });
     if (!r.ok) throw new Error('describe failed');
     const data = await r.json();
@@ -603,6 +611,8 @@ async function describeFishArt(dataUrl, fish, userName) {
   } catch (error) {
     console.warn('fish description failed', error);
     return { nameSuggestion: '', bio: '' };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1186,16 +1196,28 @@ async function submit() {
     const savedBio = describe.bio || '';
 
     btn.textContent = 'Swimming away...';
-    const r = await fetch('/api/submit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image: dataUrl,
-        name: savedName,
-        species: currentFish.id,
-        bio: savedBio,
-      }),
-    });
+    // 20s ceiling — Netlify functions cap at 10s on the free tier, so a
+    // legitimate submit always finishes well within this. The abort prevents
+    // the iPad from getting wedged with the button disabled if the network
+    // (or function) hangs.
+    const submitController = new AbortController();
+    const submitTimer = setTimeout(() => submitController.abort(), 20000);
+    let r;
+    try {
+      r = await fetch('/api/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: dataUrl,
+          name: savedName,
+          species: currentFish.id,
+          bio: savedBio,
+        }),
+        signal: submitController.signal,
+      });
+    } finally {
+      clearTimeout(submitTimer);
+    }
     if (!r.ok) throw new Error('submit failed');
     const saved = await r.json();
     const finalName = (saved.name || savedName || '').trim();

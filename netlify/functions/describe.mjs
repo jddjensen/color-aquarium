@@ -1,3 +1,12 @@
+import {
+  isSameOrigin,
+  jsonResponse,
+  normalizeSpace,
+  sanitizeBio,
+  sanitizeName,
+  sanitizeSpecies,
+} from "./_shared.mjs";
+
 const SPECIES_LABELS = {
   fish1: "Goldie",
   fish2: "Angel",
@@ -18,12 +27,13 @@ const SPECIES_LABELS = {
 
 function resolveSpeciesLabel(species, suppliedLabel) {
   if (SPECIES_LABELS[species]) return SPECIES_LABELS[species];
-  const cleaned = String(suppliedLabel || "").replace(/\s+/g, " ").trim().slice(0, 40);
+  const cleaned = normalizeSpace(suppliedLabel).slice(0, 40);
   return cleaned || "Fish";
 }
 
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
+  if (!isSameOrigin(req)) return jsonResponse(403, { error: "cross-origin blocked" });
 
   let payload;
   try {
@@ -43,7 +53,7 @@ export default async (req) => {
   }
 
   const rawName = typeof payload?.name === "string" ? sanitizeName(payload.name) : "";
-  const species = typeof payload?.species === "string" ? payload.species.trim().slice(0, 24) : "";
+  const species = sanitizeSpecies(payload?.species);
   const suppliedLabel = typeof payload?.speciesLabel === "string" ? payload.speciesLabel : "";
   const speciesLabel = resolveSpeciesLabel(species, suppliedLabel);
 
@@ -55,18 +65,6 @@ export default async (req) => {
     bio: sanitizeBio(described?.bio || fallback.bio || ""),
   });
 };
-
-function normalizeSpace(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function sanitizeName(value) {
-  return normalizeSpace(value).replace(/[^A-Za-z0-9 '\-]/g, "").slice(0, 20).trim();
-}
-
-function sanitizeBio(value) {
-  return normalizeSpace(value).slice(0, 120);
-}
 
 function stablePick(seedText, options) {
   if (!options.length) return "";
@@ -165,13 +163,6 @@ async function hfDescribeFish(image, speciesLabel, rawName) {
     }
   }
   return null;
-}
-
-function jsonResponse(status, body) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
-  });
 }
 
 export const config = { path: "/api/describe" };

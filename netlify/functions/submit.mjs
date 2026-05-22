@@ -1,11 +1,21 @@
 import { getStore } from "@netlify/blobs";
 import { randomBytes } from "node:crypto";
+import {
+  isPngBuffer,
+  isSameOrigin,
+  jsonResponse,
+  sanitizeBio,
+  sanitizeName,
+  sanitizeSpecies,
+  todayKey,
+} from "./_shared.mjs";
 
 // POST /api/submit  — body: { image: "data:image/png;base64,...", name?, species? }
 // Saves the PNG to the "fish" blob store under key `${day}/${id}.png`
 // and a JSON sidecar at `${day}/${id}.json` containing { name, species, bio, createdAt }.
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
+  if (!isSameOrigin(req)) return jsonResponse(403, { error: "cross-origin blocked" });
 
   let payload;
   try {
@@ -27,9 +37,13 @@ export default async (req) => {
   if (buf.length === 0 || buf.length > 12 * 1024 * 1024) {
     return jsonResponse(413, { error: "too large" });
   }
+  // The data URL prefix is trivial to spoof; require the decoded bytes to
+  // start with the PNG magic so the blob store doesn't get filled with
+  // arbitrary content masquerading as fish art.
+  if (!isPngBuffer(buf)) return jsonResponse(400, { error: "not a png" });
 
   const name = typeof payload.name === "string" ? sanitizeName(payload.name) : "";
-  const species = typeof payload.species === "string" ? payload.species.trim().slice(0, 24) : "";
+  const species = sanitizeSpecies(payload.species);
   const bio = typeof payload.bio === "string" ? sanitizeBio(payload.bio) : "";
   const day = todayKey();
   const id = randomBytes(8).toString("hex");
@@ -48,34 +62,5 @@ export default async (req) => {
     bio,
   });
 };
-
-function todayKey() {
-  // Uses local time (respects the TZ env var set in the Netlify site config).
-  // Without TZ set, this is UTC; set TZ (e.g. "America/New_York") so the
-  // end-of-day rollover doesn't wipe the tank during your event.
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-function jsonResponse(status, body) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
-  });
-}
-
-function normalizeSpace(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
-}
-
-function sanitizeName(value) {
-  return normalizeSpace(value).replace(/[^A-Za-z0-9 '\-]/g, "").slice(0, 20).trim();
-}
-
-function sanitizeBio(value) {
-  return normalizeSpace(value).slice(0, 120);
-}
 
 export const config = { path: "/api/submit" };

@@ -33,7 +33,11 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 PUBLIC = os.path.join(ROOT, "public")
 SUBMISSIONS = os.path.join(ROOT, "submissions")
 PORT = int(os.environ.get("PORT", "3000"))
+# Default to loopback so a laptop on shared wifi doesn't expose the dev API.
+# Set HOST=0.0.0.0 to run as a kiosk that other devices on the LAN can hit.
+HOST = os.environ.get("HOST", "127.0.0.1")
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 SPECIES_LABELS = {
     "fish1": "Goldie",
@@ -77,6 +81,15 @@ def sanitize_name(value: str) -> str:
 
 def sanitize_bio(value: str) -> str:
     return normalize_space(value)[:120].strip()
+
+
+def sanitize_species(value: str) -> str:
+    cleaned = "".join(ch for ch in (value or "").lower() if ch.isalnum() or ch == "_")
+    return cleaned[:24]
+
+
+def is_png(buf: bytes) -> bool:
+    return len(buf) >= 8 and buf[:8] == PNG_SIGNATURE
 
 
 def stable_pick(seed_text: str, options):
@@ -270,6 +283,19 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "ColoringFish/1.0"
 
     # --- helpers ---
+    def _same_origin(self) -> bool:
+        """Block cross-site POSTs. Browsers always send Origin on writes;
+        a missing header means a non-browser caller and is allowed through."""
+        origin = self.headers.get("Origin")
+        if not origin:
+            return True
+        try:
+            origin_host = urlparse(origin).netloc
+        except Exception:
+            return False
+        expected = self.headers.get("Host") or ""
+        return bool(origin_host) and origin_host == expected
+
     def _send_json(self, status: int, obj):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
@@ -331,6 +357,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path in ("/api/reset", "/api/describe", "/api/submit") and not self._same_origin():
+            return self._send_json(403, {"error": "cross-origin blocked"})
         if parsed.path == "/api/reset":
             reset_today()
             return self._send_json(200, {"ok": True, "day": today_key()})
@@ -353,7 +381,7 @@ class Handler(BaseHTTPRequestHandler):
             raw_name = payload.get("name") if isinstance(payload, dict) else None
             fish_name = sanitize_name(raw_name) if isinstance(raw_name, str) else ""
             raw_species = payload.get("species") if isinstance(payload, dict) else None
-            species = normalize_space(raw_species)[:24] if isinstance(raw_species, str) else ""
+            species = sanitize_species(raw_species) if isinstance(raw_species, str) else ""
             raw_label = payload.get("speciesLabel") if isinstance(payload, dict) else None
             supplied_label = normalize_space(raw_label)[:40] if isinstance(raw_label, str) else ""
 
@@ -386,6 +414,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(400, {"error": "bad base64"})
         if len(buf) > 12 * 1024 * 1024:
             return self._send_json(413, {"error": "too large"})
+        # The data: URL prefix is trivial to spoof; require the decoded bytes
+        # to actually start with the PNG magic number.
+        if not is_png(buf):
+            return self._send_json(400, {"error": "not a png"})
 
         raw_name = payload.get("name") if isinstance(payload, dict) else None
         if isinstance(raw_name, str):
@@ -394,10 +426,7 @@ class Handler(BaseHTTPRequestHandler):
             fish_name = ""
 
         raw_species = payload.get("species") if isinstance(payload, dict) else None
-        if isinstance(raw_species, str):
-            species = raw_species.strip()[:24]
-        else:
-            species = ""
+        species = sanitize_species(raw_species) if isinstance(raw_species, str) else ""
         raw_bio = payload.get("bio") if isinstance(payload, dict) else None
         if isinstance(raw_bio, str):
             bio = sanitize_bio(raw_bio)
@@ -435,10 +464,13 @@ def main():
     t = threading.Thread(target=cleanup_loop, daemon=True)
     t.start()
 
-    server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"Coloring Fish running at http://localhost:{PORT}")
-    print(f"  Color page:    http://localhost:{PORT}/color")
-    print(f"  Aquarium page: http://localhost:{PORT}/aquarium")
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    display_host = "localhost" if HOST in ("127.0.0.1", "0.0.0.0") else HOST
+    print(f"Coloring Fish running at http://{display_host}:{PORT}  (bound to {HOST})")
+    print(f"  Color page:    http://{display_host}:{PORT}/color")
+    print(f"  Aquarium page: http://{display_host}:{PORT}/aquarium")
+    if HOST == "127.0.0.1":
+        print("  (set HOST=0.0.0.0 to expose on the LAN for kiosk devices.)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
