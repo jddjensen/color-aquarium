@@ -1,7 +1,7 @@
 import { getStore } from "@netlify/blobs";
 import { randomBytes } from "node:crypto";
 import {
-  isPngBuffer,
+  decodePngDataUrl,
   isSameOrigin,
   jsonResponse,
   sanitizeBio,
@@ -24,27 +24,13 @@ export default async (req) => {
     return jsonResponse(400, { error: "invalid json" });
   }
 
-  const image = typeof payload?.image === "string" ? payload.image : "";
-  const PREFIX = "data:image/png;base64,";
-  if (!image.startsWith(PREFIX)) return jsonResponse(400, { error: "invalid image" });
+  const decoded = decodePngDataUrl(payload?.image, { maxBytes: 12 * 1024 * 1024 });
+  if (!decoded.ok) return jsonResponse(decoded.status, { error: decoded.error });
+  const buf = decoded.buffer;
 
-  let buf;
-  try {
-    buf = Buffer.from(image.slice(PREFIX.length), "base64");
-  } catch {
-    return jsonResponse(400, { error: "bad base64" });
-  }
-  if (buf.length === 0 || buf.length > 12 * 1024 * 1024) {
-    return jsonResponse(413, { error: "too large" });
-  }
-  // The data URL prefix is trivial to spoof; require the decoded bytes to
-  // start with the PNG magic so the blob store doesn't get filled with
-  // arbitrary content masquerading as fish art.
-  if (!isPngBuffer(buf)) return jsonResponse(400, { error: "not a png" });
-
-  const name = typeof payload.name === "string" ? sanitizeName(payload.name) : "";
-  const species = sanitizeSpecies(payload.species);
-  const bio = typeof payload.bio === "string" ? sanitizeBio(payload.bio) : "";
+  const name = typeof payload?.name === "string" ? sanitizeName(payload.name) : "";
+  const species = sanitizeSpecies(payload?.species);
+  const bio = typeof payload?.bio === "string" ? sanitizeBio(payload.bio) : "";
   const day = todayKey();
   const id = randomBytes(8).toString("hex");
   const createdAt = Date.now();

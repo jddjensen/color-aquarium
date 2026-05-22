@@ -5,9 +5,10 @@ Serves:
   /                  landing page
   /color             coloring page
   /aquarium          aquarium page
+  /privacy           privacy policy
   /style.css, /*.js  static files from ./public
   /assets/*          static files from ./public/assets
-  /submissions/*     saved fish PNGs (today's only; older days auto-deleted)
+  /submissions/*     saved fish PNGs
 
 API:
   POST /api/submit   body: {"image": "data:image/png;base64,..."}  -> {id, url, day}
@@ -38,6 +39,36 @@ PORT = int(os.environ.get("PORT", "3000"))
 HOST = os.environ.get("HOST", "127.0.0.1")
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_DATA_URL_PREFIX = "data:image/png;base64,"
+RESET_TOKEN = os.environ.get("RESET_TOKEN", "").strip()
+CLEANUP_LOCAL_SUBMISSIONS = os.environ.get("CLEANUP_LOCAL_SUBMISSIONS") == "1"
+
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "img-src 'self' data: blob:",
+    "media-src 'none'",
+    "font-src 'self' data:",
+    "style-src 'self'",
+    "script-src 'self'",
+    "connect-src 'self'",
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+])
+SECURITY_HEADERS = {
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "X-Permitted-Cross-Domain-Policies": "none",
+    "X-XSS-Protection": "0",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), publickey-credentials-get=(), sync-xhr=(), usb=(), xr-spatial-tracking=()",
+}
 
 SPECIES_LABELS = {
     "fish1": "Goldie",
@@ -90,6 +121,25 @@ def sanitize_species(value: str) -> str:
 
 def is_png(buf: bytes) -> bool:
     return len(buf) >= 8 and buf[:8] == PNG_SIGNATURE
+
+
+def decode_png_data_url(value: str, max_bytes: int = 12 * 1024 * 1024):
+    if not isinstance(value, str) or not value.startswith(PNG_DATA_URL_PREFIX):
+        return None, 400, "invalid image"
+    encoded = value[len(PNG_DATA_URL_PREFIX):]
+    if not encoded or len(encoded) > ((max_bytes * 4 + 2) // 3) + 4:
+        return None, 413, "too large"
+    if len(encoded) % 4 != 0:
+        return None, 400, "bad base64"
+    try:
+        buf = base64.b64decode(encoded, validate=True)
+    except Exception:
+        return None, 400, "bad base64"
+    if not buf or len(buf) > max_bytes:
+        return None, 413, "too large"
+    if not is_png(buf):
+        return None, 400, "not a png"
+    return buf, None, None
 
 
 def stable_pick(seed_text: str, options):
@@ -254,6 +304,8 @@ def reset_today():
 
 
 def cleanup_loop():
+    if not CLEANUP_LOCAL_SUBMISSIONS:
+        return
     # Run hourly so a long-running server wipes at midnight.
     while True:
         try:
@@ -296,6 +348,17 @@ class Handler(BaseHTTPRequestHandler):
         expected = self.headers.get("Host") or ""
         return bool(origin_host) and origin_host == expected
 
+    def _reset_authorized(self) -> bool:
+        if not RESET_TOKEN:
+            return True
+        supplied = (self.headers.get("X-Reset-Token") or "").strip()
+        return secrets.compare_digest(supplied, RESET_TOKEN)
+
+    def end_headers(self):
+        for name, value in SECURITY_HEADERS.items():
+            self.send_header(name, value)
+        super().end_headers()
+
     def _send_json(self, status: int, obj):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
@@ -336,6 +399,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_file(os.path.join(PUBLIC, "color.html"), cache="no-store")
         if path == "/aquarium":
             return self._send_file(os.path.join(PUBLIC, "aquarium.html"), cache="no-store")
+        if path == "/privacy":
+            return self._send_file(os.path.join(PUBLIC, "privacy.html"), cache="no-store")
 
         if path == "/api/fish":
             key = today_key()
@@ -360,6 +425,8 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path in ("/api/reset", "/api/describe", "/api/submit") and not self._same_origin():
             return self._send_json(403, {"error": "cross-origin blocked"})
         if parsed.path == "/api/reset":
+            if not self._reset_authorized():
+                return self._send_json(403, {"error": "invalid reset token"})
             reset_today()
             return self._send_json(200, {"ok": True, "day": today_key()})
         if parsed.path == "/api/describe":
@@ -374,9 +441,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(400, {"error": "invalid json"})
 
             image = payload.get("image") if isinstance(payload, dict) else None
-            prefix = "data:image/png;base64,"
-            if not isinstance(image, str) or not image.startswith(prefix):
-                return self._send_json(400, {"error": "invalid image"})
+            _, status, error = decode_png_data_url(image, max_bytes=1536 * 1024)
+            if status:
+                return self._send_json(status, {"error": error})
 
             raw_name = payload.get("name") if isinstance(payload, dict) else None
             fish_name = sanitize_name(raw_name) if isinstance(raw_name, str) else ""
@@ -404,20 +471,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(400, {"error": "invalid json"})
 
         image = payload.get("image") if isinstance(payload, dict) else None
-        prefix = "data:image/png;base64,"
-        if not isinstance(image, str) or not image.startswith(prefix):
-            return self._send_json(400, {"error": "invalid image"})
-
-        try:
-            buf = base64.b64decode(image[len(prefix):], validate=True)
-        except Exception:
-            return self._send_json(400, {"error": "bad base64"})
-        if len(buf) > 12 * 1024 * 1024:
-            return self._send_json(413, {"error": "too large"})
-        # The data: URL prefix is trivial to spoof; require the decoded bytes
-        # to actually start with the PNG magic number.
-        if not is_png(buf):
-            return self._send_json(400, {"error": "not a png"})
+        buf, status, error = decode_png_data_url(image, max_bytes=12 * 1024 * 1024)
+        if status:
+            return self._send_json(status, {"error": error})
 
         raw_name = payload.get("name") if isinstance(payload, dict) else None
         if isinstance(raw_name, str):
@@ -460,9 +516,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    cleanup_old_days()
-    t = threading.Thread(target=cleanup_loop, daemon=True)
-    t.start()
+    if CLEANUP_LOCAL_SUBMISSIONS:
+        cleanup_old_days()
+        t = threading.Thread(target=cleanup_loop, daemon=True)
+        t.start()
 
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     display_host = "localhost" if HOST in ("127.0.0.1", "0.0.0.0") else HOST
@@ -471,6 +528,8 @@ def main():
     print(f"  Aquarium page: http://{display_host}:{PORT}/aquarium")
     if HOST == "127.0.0.1":
         print("  (set HOST=0.0.0.0 to expose on the LAN for kiosk devices.)")
+    if not CLEANUP_LOCAL_SUBMISSIONS:
+        print("  (set CLEANUP_LOCAL_SUBMISSIONS=1 to purge old local submissions.)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

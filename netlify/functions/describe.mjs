@@ -1,4 +1,5 @@
 import {
+  decodePngDataUrl,
   isSameOrigin,
   jsonResponse,
   normalizeSpace,
@@ -42,15 +43,11 @@ export default async (req) => {
     return jsonResponse(400, { error: "invalid json" });
   }
 
-  const image = typeof payload?.image === "string" ? payload.image : "";
-  if (!image.startsWith("data:image/png;base64,")) {
-    return jsonResponse(400, { error: "invalid image" });
-  }
   // Cap describe payloads — the client resizes to ~384px, so a real preview
   // is well under 1MB. Anything bigger is misuse; reject before forwarding.
-  if (image.length > 2 * 1024 * 1024) {
-    return jsonResponse(413, { error: "too large" });
-  }
+  const decoded = decodePngDataUrl(payload?.image, { maxBytes: 1536 * 1024 });
+  if (!decoded.ok) return jsonResponse(decoded.status, { error: decoded.error });
+  const image = payload.image;
 
   const rawName = typeof payload?.name === "string" ? sanitizeName(payload.name) : "";
   const species = sanitizeSpecies(payload?.species);
@@ -123,9 +120,10 @@ async function hfDescribeFish(image, speciesLabel, rawName) {
     `Species hint: ${speciesLabel}. Child name: ${rawName || "none"}.`;
 
   for (const model of [...new Set(models)]) {
+    let timer;
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10000);
+      timer = setTimeout(() => controller.abort(), 10000);
       const response = await fetch("https://router.huggingface.co/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -146,7 +144,6 @@ async function hfDescribeFish(image, speciesLabel, rawName) {
         }),
         signal: controller.signal,
       });
-      clearTimeout(timer);
       if (!response.ok) continue;
       const payload = await response.json();
       const text = payload?.choices?.[0]?.message?.content || "";
@@ -160,6 +157,8 @@ async function hfDescribeFish(image, speciesLabel, rawName) {
       };
     } catch (error) {
       console.warn("hf describe failed", model, error);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
   return null;

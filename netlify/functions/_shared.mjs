@@ -3,6 +3,40 @@
 // the functions that import it.
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+export const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
+
+export const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  "img-src 'self' data: blob:",
+  "media-src 'none'",
+  "font-src 'self' data:",
+  "style-src 'self'",
+  "script-src 'self'",
+  "connect-src 'self'",
+  "worker-src 'self' blob:",
+  "manifest-src 'self'",
+].join("; ");
+
+export const SECURITY_HEADERS = {
+  "Content-Security-Policy": CONTENT_SECURITY_POLICY,
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "X-Permitted-Cross-Domain-Policies": "none",
+  "X-XSS-Protection": "0",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Permissions-Policy": "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), publickey-credentials-get=(), sync-xhr=(), usb=(), xr-spatial-tracking=()",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+};
+
+export function responseHeaders(headers = {}) {
+  return { ...SECURITY_HEADERS, ...headers };
+}
 
 export function isPngBuffer(buf) {
   if (!buf || buf.length < 8) return false;
@@ -10,6 +44,30 @@ export function isPngBuffer(buf) {
     if (buf[i] !== PNG_SIGNATURE[i]) return false;
   }
   return true;
+}
+
+export function decodePngDataUrl(value, { maxBytes = 12 * 1024 * 1024 } = {}) {
+  if (typeof value !== "string" || !value.startsWith(PNG_DATA_URL_PREFIX)) {
+    return { ok: false, status: 400, error: "invalid image" };
+  }
+  const encoded = value.slice(PNG_DATA_URL_PREFIX.length);
+  if (encoded.length === 0 || encoded.length > Math.ceil(maxBytes * 4 / 3) + 4) {
+    return { ok: false, status: 413, error: "too large" };
+  }
+  if (encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) {
+    return { ok: false, status: 400, error: "bad base64" };
+  }
+  let buffer;
+  try {
+    buffer = Buffer.from(encoded, "base64");
+  } catch {
+    return { ok: false, status: 400, error: "bad base64" };
+  }
+  if (buffer.length === 0 || buffer.length > maxBytes) {
+    return { ok: false, status: 413, error: "too large" };
+  }
+  if (!isPngBuffer(buffer)) return { ok: false, status: 400, error: "not a png" };
+  return { ok: true, buffer };
 }
 
 // Day key in the timezone configured by the TZ env var on Netlify. Without TZ
@@ -48,8 +106,29 @@ export function isSameOrigin(req) {
 export function jsonResponse(status, body) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+    headers: responseHeaders({
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store",
+    }),
   });
+}
+
+export function requireResetToken(req) {
+  const expected = (process.env.RESET_TOKEN || "").trim();
+  if (expected.length < 8) {
+    return {
+      ok: false,
+      response: jsonResponse(503, { error: "reset token not configured" }),
+    };
+  }
+  const supplied = (req.headers.get("x-reset-token") || "").trim();
+  if (supplied !== expected) {
+    return {
+      ok: false,
+      response: jsonResponse(403, { error: "invalid reset token" }),
+    };
+  }
+  return { ok: true };
 }
 
 export function normalizeSpace(value) {

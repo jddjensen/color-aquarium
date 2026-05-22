@@ -1,6 +1,6 @@
 import { getStore } from "@netlify/blobs";
 import { createHash } from "node:crypto";
-import { todayKey } from "./_shared.mjs";
+import { responseHeaders, todayKey } from "./_shared.mjs";
 
 // GET /api/fish  — returns today's fish list. Opportunistically purges older-day
 // blobs so the store doesn't accumulate across days. Purge runs on ~10% of polls
@@ -61,20 +61,20 @@ export default async (req) => {
   if (etagMatches(req?.headers?.get("if-none-match"), etag)) {
     return new Response(null, {
       status: 304,
-      headers: {
+      headers: responseHeaders({
         "ETag": etag,
         "Cache-Control": "no-cache",
-      },
+      }),
     });
   }
 
   return new Response(JSON.stringify({ day, fish: results }), {
     status: 200,
-    headers: {
+    headers: responseHeaders({
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-cache",
       "ETag": etag,
-    },
+    }),
   });
 };
 

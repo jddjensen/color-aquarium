@@ -34,6 +34,7 @@ const FISH_IMG_START_GAP_MS = 90;
 const FISH_IMG_CONSTRAINED_START_GAP_MS = 850;
 const FISH_IMAGE_FAILED_EVENT = 'fish-image-failed';
 const SNAPSHOT_STORAGE_KEY = 'colorAquarium:lastFish';
+const RESET_TOKEN_STORAGE_KEY = 'colorAquarium:resetToken';
 
 const DISPLAY_PARAMS = new URLSearchParams(window.location.search);
 const FORCE_CONSTRAINED_CONNECTION = DISPLAY_PARAMS.has('lowBandwidth') || DISPLAY_PARAMS.has('slowNetwork');
@@ -2961,15 +2962,29 @@ const resetBtn = document.getElementById('resetHotspot');
 if (resetBtn) {
   resetBtn.addEventListener('click', async () => {
     if (!confirm('Reset the aquarium and remove all fish for today?')) return;
+    let resetToken = '';
+    try { resetToken = sessionStorage.getItem(RESET_TOKEN_STORAGE_KEY) || ''; } catch {}
+    if (!resetToken) {
+      resetToken = (prompt('Enter the aquarium reset code:') || '').trim();
+      if (!resetToken) return;
+    }
     try {
-      const r = await fetch('/api/reset', { method: 'POST' });
+      const r = await fetch('/api/reset', {
+        method: 'POST',
+        headers: { 'X-Reset-Token': resetToken },
+      });
+      if (r.status === 403 || r.status === 503) {
+        try { sessionStorage.removeItem(RESET_TOKEN_STORAGE_KEY); } catch {}
+        throw new Error(r.status === 503 ? 'reset token is not configured on the server' : 'invalid reset code');
+      }
       if (!r.ok) throw new Error('reset failed');
+      try { sessionStorage.setItem(RESET_TOKEN_STORAGE_KEY, resetToken); } catch {}
       // Have every current fish swim off-screen; they self-destroy on exit.
       for (const f of fishById.values()) f.departToEdge();
       countEl.textContent = '0 fish today';
     } catch (e) {
       console.warn(e);
-      alert('Reset failed. Please try again.');
+      alert(e.message || 'Reset failed. Please try again.');
     }
   });
 }

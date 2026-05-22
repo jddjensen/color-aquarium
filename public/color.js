@@ -42,11 +42,6 @@ const PALETTE = [
   '#000000', '#666666', '#c0c0c0', '#ffffff',
 ];
 
-const HF_TRANSFORMERS_JS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm';
-const RMBG_MODEL_ID = 'briaai/RMBG-1.4';
-const ENHANCER_LOAD_TIMEOUT_MS = 15000;
-const ENHANCER_RUN_TIMEOUT_MS = 12000;
-
 // Pixels this dark (sum of rgb) on the line art are treated as "line" (fill barrier).
 const LINE_THRESHOLD = 360; // ~ < 120 per channel average
 // Pixels this bright on composite count as unpainted white paper when exporting.
@@ -289,8 +284,6 @@ const stickerImages = new Map();
 let currentSticker = null;
 let stickerPreview = null;
 const STICKER_CANVAS_SIZE = 120; // size in canvas px when placed
-let backgroundRemovalPipelinePromise = null;
-let backgroundRemovalUnavailable = false;
 const MIN_DECORATED_PIXELS = 120;
 let hasMeaningfulDecorationState = false;
 let strokeNeedsDecorationRecount = false;
@@ -336,7 +329,6 @@ function enterColoringView(fish) {
     coloringViewEl.classList.add('entering');
     requestAnimationFrame(() => coloringViewEl.classList.remove('entering'));
     loadFish(fish);
-    scheduleBackgroundRemovalWarmup();
   }, 350);
 }
 
@@ -435,64 +427,6 @@ function updateSubmitState() {
   }
 }
 
-function scheduleBackgroundRemovalWarmup() {
-  const warm = () => { void getBackgroundRemovalPipeline(); };
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(warm, { timeout: 1800 });
-  } else {
-    setTimeout(warm, 400);
-  }
-}
-
-function withTimeout(promise, ms, label) {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
-}
-
-async function getBackgroundRemovalPipeline() {
-  if (backgroundRemovalUnavailable) return null;
-  // iPhones / low-power devices would pull down ~100MB of WASM and still take
-  // 30+ seconds to infer — well past our timeout. Skip it and use the raw
-  // export, which still looks great in the tank.
-  if (DEVICE.lowPower || (DEVICE.isIOS && !navigator.gpu)) {
-    backgroundRemovalUnavailable = true;
-    return null;
-  }
-  if (!backgroundRemovalPipelinePromise) {
-    backgroundRemovalPipelinePromise = (async () => {
-      const { pipeline } = await import(HF_TRANSFORMERS_JS_URL);
-      const options = navigator.gpu ? { device: 'webgpu' } : {};
-      return pipeline('background-removal', RMBG_MODEL_ID, options);
-    })().catch((error) => {
-      backgroundRemovalUnavailable = true;
-      backgroundRemovalPipelinePromise = null;
-      console.warn('background removal unavailable', error);
-      return null;
-    });
-  }
-  return backgroundRemovalPipelinePromise;
-}
-
-function dataUrlToBlob(dataUrl) {
-  const [header, body = ''] = dataUrl.split(',', 2);
-  const mime = (header.match(/^data:(.*?);base64$/) || [])[1] || 'image/png';
-  const binary = atob(body);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return new Blob([bytes], { type: mime });
-}
-
 function resizeDataUrl(dataUrl, maxEdge) {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -512,63 +446,10 @@ function resizeDataUrl(dataUrl, maxEdge) {
   });
 }
 
-function rawImageToDataUrl(rawImage) {
-  const rgba = rawImage.clone().rgba();
-  const out = document.createElement('canvas');
-  out.width = rgba.width;
-  out.height = rgba.height;
-  const outCtx = out.getContext('2d');
-  const imgData = new ImageData(new Uint8ClampedArray(rgba.data), rgba.width, rgba.height);
-  outCtx.putImageData(imgData, 0, 0);
-  return out.toDataURL('image/png');
-}
-
-function loadImageFromDataUrl(dataUrl) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = dataUrl;
-  });
-}
-
-async function alphaCoverage(dataUrl) {
-  const img = await loadImageFromDataUrl(dataUrl);
-  const probe = document.createElement('canvas');
-  probe.width = img.naturalWidth || img.width;
-  probe.height = img.naturalHeight || img.height;
-  const probeCtx = probe.getContext('2d', { willReadFrequently: true });
-  probeCtx.drawImage(img, 0, 0);
-  const pixels = probeCtx.getImageData(0, 0, probe.width, probe.height).data;
-  let opaque = 0;
-  for (let i = 3; i < pixels.length; i += 4) {
-    if (pixels[i] > 8) opaque++;
-  }
-  return opaque;
-}
-
 async function enhanceFishArtwork(dataUrl) {
-  if (backgroundRemovalUnavailable) return dataUrl;
-  try {
-    const remover = await withTimeout(getBackgroundRemovalPipeline(), ENHANCER_LOAD_TIMEOUT_MS, 'background removal load');
-    if (!remover) return dataUrl;
-    const output = await withTimeout(remover(dataUrlToBlob(dataUrl)), ENHANCER_RUN_TIMEOUT_MS, 'background removal');
-    const raw = Array.isArray(output) ? output[0] : output;
-    if (!raw) return dataUrl;
-    const refined = rawImageToDataUrl(raw);
-
-    // If the inferred matte strips out too much of the drawing, prefer the
-    // original export rather than sending a barely-visible fish to the tank.
-    const [baseCoverage, refinedCoverage] = await Promise.all([
-      alphaCoverage(dataUrl),
-      alphaCoverage(refined),
-    ]);
-    if (refinedCoverage < baseCoverage * 0.45) return dataUrl;
-    return refined;
-  } catch (error) {
-    console.warn('background removal failed', error);
-    return dataUrl;
-  }
+  // Keep the browser runtime self-contained: no third-party script/model
+  // downloads are needed to submit a fish, and CSP can stay strict.
+  return dataUrl;
 }
 
 function sanitizeSuggestedName(value) {
@@ -666,7 +547,10 @@ STICKERS.forEach((s, i) => {
   sw.type = 'button';
   sw.className = 'sticker-swatch' + (i === 0 ? ' active' : '');
   sw.title = s.label;
-  sw.innerHTML = `<img src="${url}" alt="${s.label}" />`;
+  const swImg = document.createElement('img');
+  swImg.src = url;
+  swImg.alt = s.label;
+  sw.appendChild(swImg);
   sw.addEventListener('click', () => {
     document.querySelectorAll('.sticker-swatch').forEach(x => x.classList.remove('active'));
     sw.classList.add('active');
