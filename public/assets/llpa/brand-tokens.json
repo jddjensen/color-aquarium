@@ -1,0 +1,109 @@
+{
+  "$comment": "Machine-readable Loveland Living Planet Aquarium (LLPA) brand tokens. Source of truth: guides/LLPA Style Guide (2026).pdf, Version 1.0, March 2026. Use these exact values for any digital application (web, email, slides, app UI).",
+  "brand": {
+    "name": "Loveland Living Planet Aquarium",
+    "shortNames": ["Living Planet", "The Aquarium", "LLPA"],
+    "tagline": "Explore. Discover. Learn.",
+    "mission": "We inspire people to Explore, Discover, and Learn about Earth's diverse ecosystems.",
+    "vision": "We strive to foster stewardship for the environment and life on Earth.",
+    "coreValues": [
+      "Integrity",
+      "Thirst for Learning",
+      "Commitment to Excellence",
+      "Stewardship & Conservation",
+      "Leadership & Growth",
+      "Fun!"
+    ],
+    "address": "12033 South Lone Peak Parkway, Draper, UT 84020"
+  },
+  "colors": {
+    "lightBlue": {
+      "role": "primary",
+      "hex": "#779EC2",
+      "rgb": [119, 158, 194],
+      "cmyk": [95, 29, 11, 0],
+      "pms": "645 C"
+    },
+    "blue": {
+      "role": "primary",
+      "hex": "#2375A7",
+      "rgb": [35, 117, 167],
+      "cmyk": [86, 50, 16, 0],
+      "pms": "647 C"
+    },
+    "darkBlue": {
+      "role": "supporting",
+      "hex": "#13598E",
+      "rgb": [19, 89, 142],
+      "cmyk": [95, 68, 20, 5],
+      "pms": "7685 C"
+    },
+    "orange": {
+      "role": "supporting",
+      "hex": "#F36C21",
+      "rgb": [243, 108, 33],
+      "cmyk": [0, 72, 100, 0],
+      "pms": "1585 C"
+    },
+    "darkOrange": {
+      "role": "supporting",
+      "hex": "#F79550",
+      "rgb": [247, 149, 80],
+      "cmyk": [0, 50, 76, 0],
+      "pms": "1485 C"
+    },
+    "deepBlue": {
+      "role": "background",
+      "note": "Reserved primarily for backgrounds and high-contrast applications. The full-color logo with white type may appear ONLY on Deep Blue or 100% black backgrounds.",
+      "hex": "#001C3C",
+      "rgb": [0, 28, 60],
+      "cmyk": [100, 70, 25, 70],
+      "pms": "2766 C"
+    }
+  },
+  "typography": {
+    "primary": {
+      "family": "Franklin Gothic URW",
+      "alias": "FG URW",
+      "weights": ["Book", "Book Italic", "Medium", "Medium Italic", "Demi", "Demi Italic", "Heavy"],
+      "widths": ["Normal", "Condensed", "Compressed"],
+      "usage": {
+        "primaryHeadline": "FG URW Heavy, UPPERCASE",
+        "secondaryHeadline": "FG URW Demi, UPPERCASE",
+        "body": "FG URW Medium or FG URW Book",
+        "presentedBy": "FG URW Condensed Demi with expanded tracking"
+      },
+      "rules": [
+        "Do not use compressed weights unless an application specifically requires it (they reduce legibility).",
+        "Condensed weights may be used when space is limited, but only with clear purpose.",
+        "Maintain clear hierarchy: contrast weight AND size between headline, subhead, and body."
+      ]
+    },
+    "secondary": {
+      "family": "Trajan Pro",
+      "note": "Used in the logo. All-caps typeface, two weights (Regular, Bold). Display use only; use sparingly. Reserve for select headers when appropriate.",
+      "weights": ["Regular", "Bold"]
+    }
+  },
+  "logo": {
+    "components": ["Wave symbol", "wordmark"],
+    "primary": "Vertical lockup (TALL) — use whenever space and legibility allow.",
+    "secondary": "Horizontal lockup (WIDE) — use when the vertical lockup is impractical or horizontal space improves legibility.",
+    "colorVariations": {
+      "preferred": "Full-color logo whenever possible.",
+      "singleColorPreferred": "All-white logo.",
+      "singleColorSparing": "All-black logo, used sparingly.",
+      "whiteTypeVersion": "Full-color logo with white type appears ONLY on Deep Blue (#001C3C) or 100% black backgrounds. On any other dark background, use the all-white logo."
+    },
+    "clearSpace": "Use the height of the bird (x) as the minimum clear space on all sides. Include the descender of the 'Q' and the trademark mark when measuring.",
+    "minimumWidth": {
+      "note": "Do not reduce below these widths.",
+      "values": ["1.5 in", "1 in", "0.5 in"]
+    },
+    "alignment": "Align to the baseline of the wordmark, NOT the bottom of the 'Q' descender.",
+    "restrictions": [
+      "Symbol-only (Wave without wordmark) requires express approval from the COO and should be used sparingly.",
+      "The wordmark must never appear on its own without the Wave."
+    ]
+  }
+}

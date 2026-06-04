@@ -1,3 +1,16 @@
+/* LLPA brand tokens (source: brand-tokens.json in llpabranding repo).
+   The kid-friendly UI keeps a playful display face for body text; LLPA brand
+   typography (Franklin Gothic URW) is reserved for the brand lockups and
+   labels where it appears alongside the logo. */
+:root {
+  --llpa-light-blue: #779EC2;
+  --llpa-blue: #2375A7;
+  --llpa-dark-blue: #13598E;
+  --llpa-deep-blue: #001C3C;
+  --llpa-orange: #F36C21;
+  --llpa-dark-orange: #F79550;
+  --llpa-white: #FFFFFF;
+}
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; font-family: 'Comic Sans MS', 'Chalkboard SE', system-ui, sans-serif; }
 body {
@@ -25,13 +38,29 @@ body.landing {
   min-height: 100dvh;
   display: grid;
   place-items: center;
-  background: linear-gradient(180deg, #7ac6ff 0%, #0a3d62 100%);
+  /* Brand-correct gradient: LLPA Blue → Deep Blue (allows the full-color
+     "white text" logo lockup, which is only permitted on Deep Blue or pure
+     black per the LLPA brand guide). */
+  background: linear-gradient(180deg, var(--llpa-blue) 0%, var(--llpa-deep-blue) 100%);
   color: white;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 .landing-inner { text-align: center; padding: 2rem; width: min(100%, 640px); }
+.landing-llpa-logo {
+  display: block;
+  margin: 0 auto 1.5rem;
+  width: clamp(120px, 22vw, 220px);
+  height: auto;
+}
 .landing-inner h1 { font-size: clamp(2.5rem, 7vw, 5rem); margin: 0; text-shadow: 0 4px 0 rgba(0,0,0,.2); }
 .landing-inner p { font-size: clamp(1.1rem, 3vw, 1.4rem); opacity: .95; }
+.landing-slogan {
+  margin-top: .25rem;
+  font-size: clamp(.85rem, 1.6vw, 1rem);
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  opacity: .82;
+}
 .landing-buttons { display: flex; gap: 1.25rem; justify-content: center; flex-wrap: wrap; margin-top: 2rem; }
 .landing-privacy {
   position: fixed;
@@ -61,7 +90,7 @@ body.landing {
   padding: 1rem 2rem;
   border-radius: 999px;
   background: white;
-  color: #0a3d62;
+  color: var(--llpa-deep-blue);
   text-decoration: none;
   font-weight: 700;
   font-size: 1.3rem;
@@ -70,7 +99,7 @@ body.landing {
 }
 .big-btn:hover { transform: translateY(-2px); }
 .big-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 rgba(0,0,0,.15); }
-.big-btn.primary { background: #ffd34e; }
+.big-btn.primary { background: var(--llpa-orange); color: white; }
 
 /* ---------- Color page ---------- */
 body.color {
@@ -206,12 +235,17 @@ body.color {
   flex: 0 0 auto;
   padding: calc(.75rem + env(safe-area-inset-top)) calc(1rem + env(safe-area-inset-right))
            .75rem calc(1rem + env(safe-area-inset-left));
-  background: #0a3d62; color: white;
+  background: var(--llpa-deep-blue); color: white;
   gap: .75rem;
 }
 .topbar h1 { margin: 0; font-size: 1.25rem; }
 .topbar .link-btn { flex: 0 0 auto; }
-.topbar a { color: #ffd34e; text-decoration: none; font-weight: 700; }
+.topbar a { color: var(--llpa-orange); text-decoration: none; font-weight: 700; }
+.topbar-llpa {
+  height: clamp(28px, 4.5vw, 40px);
+  width: auto;
+  flex: 0 0 auto;
+}
 
 .picker { display: flex; gap: .5rem; padding: .75rem 1rem; overflow-x: auto; background: rgba(255,255,255,.6); }
 .picker button {
@@ -1407,12 +1441,23 @@ html.is-low-power .fish-wake { display: none; }
   z-index: 10;
   font-weight: 700;
 }
-.aquarium-topbar a { color: #ffd34e; text-decoration: none; }
+.aquarium-topbar a { color: var(--llpa-orange); text-decoration: none; }
+.aquarium-topbar-llpa {
+  height: clamp(28px, 3.5vw, 44px);
+  width: auto;
+  flex: 0 0 auto;
+  /* Always centered: pinned absolutely so the flexbox endpoints (count, link)
+     stay glued to their corners. */
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
 #count { display: inline-block; transform-origin: 50% 50%; }
 #count.count-pop { animation: countPop .55s cubic-bezier(.3,1.4,.4,1) 1; }
 @keyframes countPop {
   0%   { transform: scale(1); }
-  40%  { transform: scale(1.18); color: #ffd34e; }
+  40%  { transform: scale(1.18); color: var(--llpa-orange); }
   100% { transform: scale(1); }
 }
 @media (prefers-reduced-motion: reduce) {

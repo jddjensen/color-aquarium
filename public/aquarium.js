@@ -11,9 +11,15 @@ const fishById = new Map();
 const culledIds = new Set();
 let currentDay = null;
 
-// At the top of every wall-clock hour, half of the school-mode fish are sent
-// off-screen. Keeps the tank from growing unbounded at an event.
-const CULL_FRACTION = 0.5;
+// Daily auto-clear: at 11:30 p.m. Mountain Time (America/Denver), every fish
+// swims off-screen and the server-side store for the day is wiped. Fish are
+// otherwise kept all day so guests' artwork stays visible until close. The
+// 11:30 wind-down gives a 30-minute buffer before the server-side day rolls
+// over at midnight Denver time (when TZ=America/Denver is set on Netlify).
+const DAILY_CLEAR_TZ = 'America/Denver';
+const DAILY_CLEAR_HOUR = 23;
+const DAILY_CLEAR_MINUTE = 30;
+const DAILY_CLEAR_CHECK_MS = 60 * 1000;
 // Short polling - guests watch the podium-to-TV handoff, low latency sells the
 // magic. On constrained connections we relax this a bit so the display does
 // less background traffic and leaves room for image downloads.
@@ -2918,44 +2924,74 @@ if (CONNECTION && CONNECTION.addEventListener) {
   });
 }
 
-// Periodic thin-out: at the top of every wall-clock hour, about half of the
-// tank's school fish swim off the sides and don't come back. Keeps long events
-// from drowning in sprites without having to touch the server-side store.
-function cullHalfSchool() {
-  const eligible = [];
+// Daily 11:30 p.m. Mountain Time auto-clear. Fish stay all day; once per
+// Denver calendar day, when wall-clock time crosses 23:30, every fish swims
+// off-screen and (if a reset token is on hand from the operator's hotspot use)
+// the server-side store for the day is wiped too. A polling check avoids the
+// DST math involved in computing a precise next-fire time, and naturally
+// catches up after a long sleep/wake.
+let lastDailyClearDayKey = null;
+function denverDateParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: DAILY_CLEAR_TZ,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+  const get = (t) => parts.find((p) => p.type === t)?.value || '';
+  return {
+    dayKey: `${get('year')}-${get('month')}-${get('day')}`,
+    hour: parseInt(get('hour'), 10),
+    minute: parseInt(get('minute'), 10),
+  };
+}
+
+async function runDailyClear() {
+  console.info('daily clear: 11:30 p.m. Mountain wind-down');
+  // Visual: every fish swims out, then self-destroys on exit. Mark each id as
+  // culled so the next poll doesn't immediately re-add the same fish if the
+  // server-side reset is unavailable (no stored token). Both sets are wiped
+  // when the server day rolls over at midnight Denver time.
   for (const f of fishById.values()) {
-    if (f.mode !== 'school') continue;
-    if (f.departing || !f.loaded) continue;
-    eligible.push(f);
+    culledIds.add(f.id);
+    if (!f.departing) f.departToEdge();
   }
-  if (eligible.length < 2) return;
-  // Fisher-Yates partial shuffle: take the first N after shuffling.
-  for (let i = eligible.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [eligible[i], eligible[j]] = [eligible[j], eligible[i]];
-  }
-  const take = Math.max(1, Math.round(eligible.length * CULL_FRACTION));
-  for (let i = 0; i < take; i++) {
-    // Stagger the exits so the tank doesn't suddenly empty in one frame.
-    const f = eligible[i];
-    setTimeout(() => {
-      if (!fishById.has(f.id) || f.departing) return;
-      f.departToEdge({ cull: true });
-    }, Math.floor(Math.random() * 4000));
+  countEl.textContent = '0 fish today';
+
+  // Server-side: only attempt if we have a stored reset token. Otherwise the
+  // server's midnight Denver day rollover handles cleanup naturally (when
+  // TZ=America/Denver is set on Netlify) and we just let the tank look empty
+  // for the last 30 minutes of the day.
+  let resetToken = '';
+  try { resetToken = sessionStorage.getItem(RESET_TOKEN_STORAGE_KEY) || ''; } catch {}
+  if (!resetToken) return;
+  try {
+    const r = await fetch('/api/reset', {
+      method: 'POST',
+      headers: { 'X-Reset-Token': resetToken },
+    });
+    if (r.status === 403 || r.status === 503) {
+      try { sessionStorage.removeItem(RESET_TOKEN_STORAGE_KEY); } catch {}
+    }
+  } catch (e) {
+    console.warn('daily clear server reset failed', e);
   }
 }
-// Re-target the next absolute top-of-hour each time, so the schedule doesn't
-// drift across sleep/wake or DST changes.
-function scheduleNextHourlyCull() {
-  const now = new Date();
-  const next = new Date(now);
-  next.setHours(now.getHours() + 1, 0, 0, 0);
-  setTimeout(() => {
-    cullHalfSchool();
-    scheduleNextHourlyCull();
-  }, next.getTime() - now.getTime());
+
+function checkDailyClear() {
+  const { dayKey, hour, minute } = denverDateParts();
+  if (hour < DAILY_CLEAR_HOUR || (hour === DAILY_CLEAR_HOUR && minute < DAILY_CLEAR_MINUTE)) {
+    // Reset the latch a few hours before the next clear so a tab that boots
+    // mid-day doesn't think "today's clear already happened".
+    if (hour < DAILY_CLEAR_HOUR) lastDailyClearDayKey = lastDailyClearDayKey === dayKey ? lastDailyClearDayKey : null;
+    return;
+  }
+  if (lastDailyClearDayKey === dayKey) return;
+  lastDailyClearDayKey = dayKey;
+  void runDailyClear();
 }
-scheduleNextHourlyCull();
+checkDailyClear();
+setInterval(checkDailyClear, DAILY_CLEAR_CHECK_MS);
 
 // ---------- Hidden reset hotspot ----------
 const resetBtn = document.getElementById('resetHotspot');
