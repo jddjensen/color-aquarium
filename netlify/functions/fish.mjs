@@ -1,18 +1,17 @@
 import { getStore } from "@netlify/blobs";
 import { createHash } from "node:crypto";
-import { responseHeaders, todayKey } from "./_shared.mjs";
+import { purgeOldDaysFromStore, responseHeaders, todayKey } from "./_shared.mjs";
 
-// GET /api/fish  — returns today's fish list. Opportunistically purges older-day
-// blobs so the store doesn't accumulate across days. Purge runs on ~10% of polls
-// to keep function duration down; within ~15 seconds of the day rolling over,
-// stale data is gone.
+// GET /api/fish  — returns today's fish list. Hourly scheduled cleanup is the
+// main retention path; this tiny opportunistic purge is a backup if scheduled
+// invocations are delayed or disabled.
 export default async (req) => {
   const day = todayKey();
   // Strong consistency — otherwise list() can lag new submissions by 10–60 s.
   const store = getStore({ name: "fish", consistency: "strong" });
 
   if (Math.random() < 0.1) {
-    purgeOldDays(store, day).catch((e) => console.warn("purge failed", e));
+    purgeOldDaysFromStore(store, day).catch((e) => console.warn("purge failed", e));
   }
 
   const { blobs } = await store.list({ prefix: `${day}/` });
@@ -90,20 +89,6 @@ function etagMatches(header, etag) {
   if (!header) return false;
   if (header.trim() === "*") return true;
   return header.split(",").map((value) => value.trim()).includes(etag);
-}
-
-async function purgeOldDays(store, today) {
-  const { blobs } = await store.list();
-  const stale = [];
-  for (const b of blobs) {
-    const slash = b.key.indexOf("/");
-    if (slash <= 0) continue;
-    if (b.key.slice(0, slash) !== today) stale.push(b.key);
-  }
-  const BATCH = 20;
-  for (let i = 0; i < stale.length; i += BATCH) {
-    await Promise.all(stale.slice(i, i + BATCH).map((k) => store.delete(k)));
-  }
 }
 
 export const config = { path: "/api/fish" };

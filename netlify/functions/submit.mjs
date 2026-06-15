@@ -4,6 +4,8 @@ import {
   decodePngDataUrl,
   isSameOrigin,
   jsonResponse,
+  requestBodyTooLarge,
+  requireRateLimit,
   sanitizeBio,
   sanitizeName,
   sanitizeSpecies,
@@ -16,6 +18,11 @@ import {
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
   if (!isSameOrigin(req)) return jsonResponse(403, { error: "cross-origin blocked" });
+  if (requestBodyTooLarge(req, 16 * 1024 * 1024)) {
+    return jsonResponse(413, { error: "too large" });
+  }
+  const rate = await requireRateLimit(req, "submit");
+  if (!rate.ok) return rate.response;
 
   let payload;
   try {

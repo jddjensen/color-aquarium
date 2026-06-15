@@ -1,6 +1,7 @@
 # Security Review
 
 Date: 2026-05-22
+Updated: 2026-06-14
 
 Scope: static pages, browser JavaScript, Netlify Functions, Netlify headers, and the local `server.py` development server.
 
@@ -30,11 +31,21 @@ Finding: The reset endpoint was same-origin protected, but it was still a destru
 
 Fix: Netlify reset now requires a `RESET_TOKEN` environment variable of at least 8 characters and the matching `X-Reset-Token` request header. The aquarium UI prompts for the code and stores it for the browser session. Local `server.py` supports the same header when `RESET_TOKEN` is set.
 
+Follow-up: Local `server.py` now also requires a configured `RESET_TOKEN` of at least 8 characters before reset will run. Missing or short tokens return `503` instead of allowing an unauthenticated wipe.
+
+### A04 Insecure Design / Abuse Controls
+
+Finding: Public write endpoints accepted missing-Origin requests and did not rate-limit submission, description, or reset attempts.
+
+Fix: Production functions now reject missing `Origin` headers unless `ALLOW_NO_ORIGIN_POSTS=1` is explicitly set for trusted testing, enforce request-size caps before JSON parsing, and apply per-client rate limits backed by Netlify Blobs. The local Python server mirrors the missing-Origin block and in-memory rate limits.
+
 ### A06 Insecure Design / Privacy
 
 Finding: The app collected and displayed child-created artwork without an accessible privacy notice.
 
 Fix: Added a privacy page linked quietly from the landing page. The policy documents artwork/name/bio collection, public display, optional Hugging Face description use, current-day retention, and cache caveats.
+
+Follow-up: Production now includes an hourly scheduled cleanup function for old-day fish and rate-limit blobs. Local cleanup is enabled by default and can be disabled only with `CLEANUP_LOCAL_SUBMISSIONS=0`.
 
 ## Residual Operational Notes
 

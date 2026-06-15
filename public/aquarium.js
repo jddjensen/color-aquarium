@@ -756,11 +756,12 @@ class Fish {
 
   onImageSettled(callback) {
     if (this.loaded || this.imgFailed) {
-      callback();
+      callback(this);
       return;
     }
-    this.img.addEventListener('load', callback, { once: true });
-    this.img.addEventListener(FISH_IMAGE_FAILED_EVENT, callback, { once: true });
+    const done = () => callback(this);
+    this.img.addEventListener('load', done, { once: true });
+    this.img.addEventListener(FISH_IMAGE_FAILED_EVENT, done, { once: true });
   }
 
   startAsSchool() {
@@ -2626,11 +2627,12 @@ function cinematicAdvance() {
     const fish = cinematicQueue.shift();
     // Drop fish that got removed (day reset, destroyed) before their turn.
     if (!fishById.has(fish.id)) continue;
-    // If the image errored (broken blob, network drop), skip rather than
-    // park forever at the head of the queue and stall every later arrival.
+    // If the image errored (broken blob, network drop), remove it rather than
+    // count an invisible fish or park forever at the head of the queue.
     if (fish.imgFailed) {
-      fish.cinematicPending = false;
-      fish.startAsSchool();
+      fish.destroy();
+      fishById.delete(fish.id);
+      updateFishCount();
       continue;
     }
     if (!fish.loaded) {
@@ -2755,12 +2757,24 @@ function hideOfflineNotice() {
   setTimeout(() => el.remove(), 600);
 }
 
+function snapshotDayKey() {
+  try {
+    return denverDateParts().dayKey;
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
 function loadSnapshot() {
   try {
     const raw = localStorage.getItem(SNAPSHOT_STORAGE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (!data || typeof data !== 'object' || !Array.isArray(data.fish)) return null;
+    if (data.day !== snapshotDayKey()) {
+      localStorage.removeItem(SNAPSHOT_STORAGE_KEY);
+      return null;
+    }
     if (typeof data.etag === 'string') lastFishEtag = data.etag;
     return data;
   } catch {
@@ -2774,6 +2788,20 @@ function saveSnapshot(data) {
     localStorage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
   } catch {
     // Quota / private-mode failures are non-fatal — the tank is still live.
+  }
+}
+
+function updateFishCount(newCount = fishById.size) {
+  if (!countEl) return;
+  if (countEl.dataset.count !== String(newCount)) {
+    const prev = Number(countEl.dataset.count || '0');
+    countEl.dataset.count = String(newCount);
+    countEl.textContent = `${newCount} fish today`;
+    if (newCount > prev && prev > 0 && !REDUCE_MOTION) {
+      countEl.classList.remove('count-pop');
+      void countEl.offsetWidth;
+      countEl.classList.add('count-pop');
+    }
   }
 }
 
@@ -2818,6 +2846,12 @@ function applyFishData(data, { fromCache = false } = {}) {
     fish.requestImageLoad({ priority: !firstLoad && !skipCinematic });
     if (firstLoad || REDUCE_MOTION || skipCinematic) {
       const drop = () => {
+        if (fish.imgFailed) {
+          fish.destroy();
+          fishById.delete(fish.id);
+          updateFishCount();
+          return;
+        }
         fish.startAsSchool();
         if (!firstLoad && !skipCinematic && fish.nameTag) {
           fish.nameShowUntil = performance.now() + NAME_SHOW_MS;
@@ -2842,17 +2876,7 @@ function applyFishData(data, { fromCache = false } = {}) {
     if (!serverIds.has(id)) culledIds.delete(id);
   }
 
-  const newCount = fishById.size;
-  if (countEl.dataset.count !== String(newCount)) {
-    const prev = Number(countEl.dataset.count || '0');
-    countEl.dataset.count = String(newCount);
-    countEl.textContent = `${newCount} fish today`;
-    if (newCount > prev && prev > 0 && !REDUCE_MOTION) {
-      countEl.classList.remove('count-pop');
-      void countEl.offsetWidth;
-      countEl.classList.add('count-pop');
-    }
-  }
+  updateFishCount();
 }
 
 async function poll() {

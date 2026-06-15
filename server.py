@@ -13,6 +13,7 @@ Serves:
 API:
   POST /api/submit   body: {"image": "data:image/png;base64,..."}  -> {id, url, day}
   POST /api/describe body: {"image": "data:image/png;base64,...", "species": "...", "name": "..."} -> {nameSuggestion, bio}
+  POST /api/reset    header: X-Reset-Token -> clears today's fish when RESET_TOKEN is configured
   GET  /api/fish     -> {day, fish: [{id, url, createdAt}]}
 
 No external dependencies. Run with:  python server.py
@@ -26,6 +27,7 @@ import os
 import secrets
 import shutil
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -37,11 +39,47 @@ PORT = int(os.environ.get("PORT", "3000"))
 # Default to loopback so a laptop on shared wifi doesn't expose the dev API.
 # Set HOST=0.0.0.0 to run as a kiosk that other devices on the LAN can hit.
 HOST = os.environ.get("HOST", "127.0.0.1")
-MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+MAX_SUBMIT_BODY_BYTES = 16 * 1024 * 1024
+MAX_DESCRIBE_BODY_BYTES = 2 * 1024 * 1024
+MAX_UPLOAD_BYTES = 12 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_DATA_URL_PREFIX = "data:image/png;base64,"
 RESET_TOKEN = os.environ.get("RESET_TOKEN", "").strip()
-CLEANUP_LOCAL_SUBMISSIONS = os.environ.get("CLEANUP_LOCAL_SUBMISSIONS") == "1"
+CLEANUP_LOCAL_SUBMISSIONS = os.environ.get("CLEANUP_LOCAL_SUBMISSIONS", "1") != "0"
+ALLOW_NO_ORIGIN_POSTS = os.environ.get("ALLOW_NO_ORIGIN_POSTS") == "1"
+
+
+def positive_int_env(name: str, fallback: int) -> int:
+    try:
+        parsed = int(os.environ.get(name, ""))
+    except ValueError:
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def rate_window_seconds(prefix: str, fallback: int) -> int:
+    window_ms = positive_int_env(f"{prefix}_RATE_WINDOW_MS", 0)
+    if window_ms > 0:
+        return max(1, (window_ms + 999) // 1000)
+    return positive_int_env(f"{prefix}_RATE_WINDOW_SECONDS", fallback)
+
+
+RATE_LIMITS = {}
+RATE_LIMIT_LOCK = threading.Lock()
+RATE_LIMIT_CONFIG = {
+    "submit": (
+        positive_int_env("SUBMIT_RATE_LIMIT", 20),
+        rate_window_seconds("SUBMIT", 60),
+    ),
+    "describe": (
+        positive_int_env("DESCRIBE_RATE_LIMIT", 30),
+        rate_window_seconds("DESCRIBE", 60),
+    ),
+    "reset": (
+        positive_int_env("RESET_RATE_LIMIT", 6),
+        rate_window_seconds("RESET", 60),
+    ),
+}
 
 CONTENT_SECURITY_POLICY = "; ".join([
     "default-src 'self'",
@@ -336,39 +374,77 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- helpers ---
     def _same_origin(self) -> bool:
-        """Block cross-site POSTs. Browsers always send Origin on writes;
-        a missing header means a non-browser caller and is allowed through."""
+        """Block cross-site writes and missing-origin curl writes by default."""
         origin = self.headers.get("Origin")
         if not origin:
-            return True
+            return ALLOW_NO_ORIGIN_POSTS
         try:
-            origin_host = urlparse(origin).netloc
+            parsed_origin = urlparse(origin)
+            origin_host = parsed_origin.netloc
         except Exception:
             return False
         expected = self.headers.get("Host") or ""
-        return bool(origin_host) and origin_host == expected
+        return parsed_origin.scheme in ("http", "https") and bool(origin_host) and origin_host == expected
 
-    def _reset_authorized(self) -> bool:
-        if not RESET_TOKEN:
-            return True
+    def _reset_auth_error(self):
+        if len(RESET_TOKEN) < 8:
+            return 503, "reset token not configured"
         supplied = (self.headers.get("X-Reset-Token") or "").strip()
-        return secrets.compare_digest(supplied, RESET_TOKEN)
+        if not secrets.compare_digest(supplied, RESET_TOKEN):
+            return 403, "invalid reset token"
+        return None, None
+
+    def _client_key(self) -> str:
+        forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        if forwarded:
+            return forwarded
+        if self.client_address:
+            return self.client_address[0]
+        return "unknown"
+
+    def _rate_limit_retry_after(self, bucket: str):
+        if os.environ.get("DISABLE_API_RATE_LIMIT") == "1":
+            return None
+        limit, window_seconds = RATE_LIMIT_CONFIG.get(bucket, (30, 60))
+        now = time.time()
+        key = (bucket, self._client_key())
+        with RATE_LIMIT_LOCK:
+            record = RATE_LIMITS.get(key)
+            if not record or record["reset_at"] <= now:
+                RATE_LIMITS[key] = {"count": 1, "reset_at": now + window_seconds}
+                return None
+            if record["count"] >= limit:
+                return max(1, int(record["reset_at"] - now + 0.999))
+            record["count"] += 1
+            return None
+
+    def _enforce_rate_limit(self, bucket: str) -> bool:
+        retry_after = self._rate_limit_retry_after(bucket)
+        if retry_after is None:
+            return True
+        self._send_json(429, {"error": "too many requests"}, {
+            "Retry-After": str(retry_after),
+        })
+        return False
 
     def end_headers(self):
         for name, value in SECURITY_HEADERS.items():
             self.send_header(name, value)
         super().end_headers()
 
-    def _send_json(self, status: int, obj):
+    def _send_json(self, status: int, obj, extra_headers=None, head_only: bool = False):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
-        self.wfile.write(body)
+        if not head_only:
+            self.wfile.write(body)
 
-    def _send_file(self, path: str, cache: str = "public, max-age=300"):
+    def _send_file(self, path: str, cache: str = "public, max-age=300", head_only: bool = False):
         if not os.path.isfile(path):
             self.send_error(404, "Not found")
             return
@@ -386,52 +462,66 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", cache)
         self.end_headers()
-        self.wfile.write(data)
+        if not head_only:
+            self.wfile.write(data)
 
     # --- routing ---
-    def do_GET(self):
+    def _route_get(self, head_only: bool = False):
         parsed = urlparse(self.path)
         path = parsed.path
 
         if path == "/" or path == "/index.html":
-            return self._send_file(os.path.join(PUBLIC, "index.html"), cache="no-store")
+            return self._send_file(os.path.join(PUBLIC, "index.html"), cache="no-store", head_only=head_only)
         if path == "/color":
-            return self._send_file(os.path.join(PUBLIC, "color.html"), cache="no-store")
+            return self._send_file(os.path.join(PUBLIC, "color.html"), cache="no-store", head_only=head_only)
         if path == "/aquarium":
-            return self._send_file(os.path.join(PUBLIC, "aquarium.html"), cache="no-store")
+            return self._send_file(os.path.join(PUBLIC, "aquarium.html"), cache="no-store", head_only=head_only)
         if path == "/privacy":
-            return self._send_file(os.path.join(PUBLIC, "privacy.html"), cache="no-store")
+            return self._send_file(os.path.join(PUBLIC, "privacy.html"), cache="no-store", head_only=head_only)
 
         if path == "/api/fish":
             key = today_key()
-            return self._send_json(200, {"day": key, "fish": read_fish_for_day(key)})
+            if CLEANUP_LOCAL_SUBMISSIONS:
+                cleanup_old_days()
+            return self._send_json(200, {"day": key, "fish": read_fish_for_day(key)}, head_only=head_only)
 
         if path.startswith("/submissions/"):
             rel = path[len("/submissions/"):]
             full = safe_join(SUBMISSIONS, rel)
             if not full:
                 return self.send_error(400, "Bad path")
-            return self._send_file(full, cache="no-store")
+            return self._send_file(full, cache="no-store", head_only=head_only)
 
         # Everything else from /public
         rel = path.lstrip("/") or "index.html"
         full = safe_join(PUBLIC, rel)
         if full and os.path.isfile(full):
-            return self._send_file(full)
+            return self._send_file(full, head_only=head_only)
         self.send_error(404, "Not found")
+
+    def do_GET(self):
+        return self._route_get(head_only=False)
+
+    def do_HEAD(self):
+        return self._route_get(head_only=True)
 
     def do_POST(self):
         parsed = urlparse(self.path)
         if parsed.path in ("/api/reset", "/api/describe", "/api/submit") and not self._same_origin():
             return self._send_json(403, {"error": "cross-origin blocked"})
         if parsed.path == "/api/reset":
-            if not self._reset_authorized():
-                return self._send_json(403, {"error": "invalid reset token"})
+            if not self._enforce_rate_limit("reset"):
+                return
+            status, error = self._reset_auth_error()
+            if status:
+                return self._send_json(status, {"error": error})
             reset_today()
             return self._send_json(200, {"ok": True, "day": today_key()})
         if parsed.path == "/api/describe":
+            if not self._enforce_rate_limit("describe"):
+                return
             length = int(self.headers.get("Content-Length") or 0)
-            if length <= 0 or length > MAX_UPLOAD_BYTES:
+            if length <= 0 or length > MAX_DESCRIBE_BODY_BYTES:
                 return self._send_json(413, {"error": "too large"})
 
             raw = self.rfile.read(length)
@@ -460,8 +550,10 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path != "/api/submit":
             return self.send_error(404, "Not found")
 
+        if not self._enforce_rate_limit("submit"):
+            return
         length = int(self.headers.get("Content-Length") or 0)
-        if length <= 0 or length > MAX_UPLOAD_BYTES:
+        if length <= 0 or length > MAX_SUBMIT_BODY_BYTES:
             return self._send_json(413, {"error": "too large"})
 
         raw = self.rfile.read(length)
@@ -471,7 +563,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(400, {"error": "invalid json"})
 
         image = payload.get("image") if isinstance(payload, dict) else None
-        buf, status, error = decode_png_data_url(image, max_bytes=12 * 1024 * 1024)
+        buf, status, error = decode_png_data_url(image, max_bytes=MAX_UPLOAD_BYTES)
         if status:
             return self._send_json(status, {"error": error})
 
@@ -528,8 +620,10 @@ def main():
     print(f"  Aquarium page: http://{display_host}:{PORT}/aquarium")
     if HOST == "127.0.0.1":
         print("  (set HOST=0.0.0.0 to expose on the LAN for kiosk devices.)")
+    if len(RESET_TOKEN) < 8:
+        print("  (set RESET_TOKEN to at least 8 characters to enable aquarium reset.)")
     if not CLEANUP_LOCAL_SUBMISSIONS:
-        print("  (set CLEANUP_LOCAL_SUBMISSIONS=1 to purge old local submissions.)")
+        print("  (local old-day cleanup is disabled; unset CLEANUP_LOCAL_SUBMISSIONS or set it to 1 to enable.)")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -1,10 +1,18 @@
 import { getStore } from "@netlify/blobs";
-import { isSameOrigin, jsonResponse, requireResetToken, todayKey } from "./_shared.mjs";
+import {
+  isSameOrigin,
+  jsonResponse,
+  requireRateLimit,
+  requireResetToken,
+  todayKey,
+} from "./_shared.mjs";
 
 // POST /api/reset  — wipes today's fish (used by the hidden aquarium hotspot).
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
   if (!isSameOrigin(req)) return jsonResponse(403, { error: "cross-origin blocked" });
+  const rate = await requireRateLimit(req, "reset");
+  if (!rate.ok) return rate.response;
   const token = requireResetToken(req);
   if (!token.ok) return token.response;
 
