@@ -1,8 +1,10 @@
 import { getStore } from "@netlify/blobs";
 import {
+  bumpDayRevision,
+  FISH_STORE,
   isSameOrigin,
   jsonResponse,
-  requireRateLimit,
+  resetDailyCapacity,
   requireResetToken,
   todayKey,
 } from "./_shared.mjs";
@@ -11,19 +13,22 @@ import {
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
   if (!isSameOrigin(req)) return jsonResponse(403, { error: "cross-origin blocked" });
-  const rate = await requireRateLimit(req, "reset");
-  if (!rate.ok) return rate.response;
   const token = requireResetToken(req);
   if (!token.ok) return token.response;
 
   const day = todayKey();
-  const store = getStore({ name: "fish", consistency: "strong" });
+  const store = getStore({ name: FISH_STORE, consistency: "strong" });
   const { blobs } = await store.list({ prefix: `${day}/` });
   const BATCH = 20;
   for (let i = 0; i < blobs.length; i += BATCH) {
     await Promise.all(blobs.slice(i, i + BATCH).map((b) => store.delete(b.key)));
   }
-  return jsonResponse(200, { ok: true, day });
+  await resetDailyCapacity(day);
+  const revision = await bumpDayRevision(store, day);
+  return jsonResponse(200, { ok: true, day, revision });
 };
 
-export const config = { path: "/api/reset" };
+export const config = {
+  path: "/api/reset",
+  rateLimit: { windowLimit: 6, windowSize: 60, aggregateBy: ["ip", "domain"] },
+};

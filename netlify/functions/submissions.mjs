@@ -24,9 +24,8 @@ export default async (req) => {
     status: 200,
     headers: responseHeaders({
       "Content-Type": "image/png",
-      // Keep same-day display reloads fast without making child artwork
-      // effectively permanent in shared caches.
-      "Cache-Control": "public, max-age=86400, stale-while-revalidate=3600",
+      // Child-created artwork should disappear from caches promptly after reset.
+      "Cache-Control": "private, no-store, max-age=0",
     }),
   });
 };

@@ -6,6 +6,7 @@ Serves:
   /color             coloring page
   /aquarium          aquarium page
   /privacy           privacy policy
+  /operator          staff controls
   /style.css, /*.js  static files from ./public
   /assets/*          static files from ./public/assets
   /submissions/*     saved fish PNGs
@@ -13,8 +14,10 @@ Serves:
 API:
   POST /api/submit   body: {"image": "data:image/png;base64,..."}  -> {id, url, day}
   POST /api/describe body: {"image": "data:image/png;base64,...", "species": "...", "name": "..."} -> {nameSuggestion, bio}
+  POST /api/enrich   body: {"day": "...", "id": "...", "nameSuggestion": "...", "bio": "..."}
   POST /api/reset    header: X-Reset-Token -> clears today's fish when RESET_TOKEN is configured
   GET  /api/fish     -> {day, fish: [{id, url, createdAt}]}
+  GET  /api/status   header: X-Reset-Token -> operator health and capacity
 
 No external dependencies. Run with:  python server.py
 """
@@ -31,6 +34,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PUBLIC = os.path.join(ROOT, "public")
@@ -39,14 +43,23 @@ PORT = int(os.environ.get("PORT", "3000"))
 # Default to loopback so a laptop on shared wifi doesn't expose the dev API.
 # Set HOST=0.0.0.0 to run as a kiosk that other devices on the LAN can hit.
 HOST = os.environ.get("HOST", "127.0.0.1")
-MAX_SUBMIT_BODY_BYTES = 16 * 1024 * 1024
+MAX_SUBMIT_BODY_BYTES = int(4.5 * 1024 * 1024)
 MAX_DESCRIBE_BODY_BYTES = 2 * 1024 * 1024
-MAX_UPLOAD_BYTES = 12 * 1024 * 1024
+MAX_UPLOAD_BYTES = 3 * 1024 * 1024
+MAX_IMAGE_WIDTH = 1600
+MAX_IMAGE_HEIGHT = 1200
+MAX_IMAGE_PIXELS = 2_000_000
+MAX_DAILY_SUBMISSIONS = int(os.environ.get("MAX_DAILY_SUBMISSIONS", "500"))
+MAX_DAILY_STORAGE_BYTES = int(os.environ.get("MAX_DAILY_STORAGE_BYTES", str(250 * 1024 * 1024)))
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 PNG_DATA_URL_PREFIX = "data:image/png;base64,"
 RESET_TOKEN = os.environ.get("RESET_TOKEN", "").strip()
+KIOSK_TOKEN = os.environ.get("KIOSK_TOKEN", "").strip()
+APP_TIMEZONE = os.environ.get("APP_TIMEZONE", os.environ.get("TZ", "America/Denver"))
+APP_ZONE = ZoneInfo(APP_TIMEZONE)
 CLEANUP_LOCAL_SUBMISSIONS = os.environ.get("CLEANUP_LOCAL_SUBMISSIONS", "1") != "0"
 ALLOW_NO_ORIGIN_POSTS = os.environ.get("ALLOW_NO_ORIGIN_POSTS") == "1"
+STORAGE_LOCK = threading.Lock()
 
 
 def positive_int_env(name: str, fallback: int) -> int:
@@ -131,7 +144,7 @@ mimetypes.add_type("application/javascript", ".js")
 
 
 def today_key() -> str:
-    return dt.date.today().isoformat()
+    return dt.datetime.now(APP_ZONE).date().isoformat()
 
 
 def day_dir(key: str) -> str:
@@ -161,6 +174,16 @@ def is_png(buf: bytes) -> bool:
     return len(buf) >= 8 and buf[:8] == PNG_SIGNATURE
 
 
+def png_dimensions(buf: bytes):
+    if not is_png(buf) or len(buf) < 24 or buf[12:16] != b"IHDR":
+        return None
+    width = int.from_bytes(buf[16:20], "big")
+    height = int.from_bytes(buf[20:24], "big")
+    if width <= 0 or height <= 0:
+        return None
+    return width, height
+
+
 def decode_png_data_url(value: str, max_bytes: int = 12 * 1024 * 1024):
     if not isinstance(value, str) or not value.startswith(PNG_DATA_URL_PREFIX):
         return None, 400, "invalid image"
@@ -177,7 +200,76 @@ def decode_png_data_url(value: str, max_bytes: int = 12 * 1024 * 1024):
         return None, 413, "too large"
     if not is_png(buf):
         return None, 400, "not a png"
+    dimensions = png_dimensions(buf)
+    if not dimensions:
+        return None, 400, "invalid png header"
+    width, height = dimensions
+    if width > MAX_IMAGE_WIDTH or height > MAX_IMAGE_HEIGHT or width * height > MAX_IMAGE_PIXELS:
+        return None, 413, "image dimensions too large"
     return buf, None, None
+
+
+def revision_path(key: str) -> str:
+    return os.path.join(day_dir(key), "_revision.json")
+
+
+def read_day_revision(key: str) -> str:
+    try:
+        with open(revision_path(key), "r", encoding="utf-8") as handle:
+            value = json.load(handle).get("value")
+        return value if isinstance(value, str) else ""
+    except Exception:
+        return ""
+
+
+def atomic_write_bytes(path: str, data: bytes):
+    temp_path = f"{path}.{secrets.token_hex(4)}.tmp"
+    with open(temp_path, "wb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+
+
+def atomic_write_json(path: str, data):
+    temp_path = f"{path}.{secrets.token_hex(4)}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, separators=(",", ":"))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+
+
+def bump_day_revision(key: str) -> str:
+    os.makedirs(day_dir(key), exist_ok=True)
+    value = f"{int(time.time() * 1000):x}-{secrets.token_hex(6)}"
+    atomic_write_json(revision_path(key), {"value": value, "updatedAt": int(time.time() * 1000)})
+    return value
+
+
+def revision_etag(key: str, revision: str) -> str:
+    import hashlib
+    digest = hashlib.sha1(f"{key}:{revision}".encode("utf-8")).hexdigest()[:24]
+    return f'"fish-{digest}"'
+
+
+def day_usage(key: str):
+    directory = day_dir(key)
+    count = 0
+    total_bytes = 0
+    if not os.path.isdir(directory):
+        return {"count": 0, "bytes": 0}
+    for filename in os.listdir(directory):
+        if len(filename) != 21 or not filename.endswith(".json") or filename.startswith("_"):
+            continue
+        try:
+            with open(os.path.join(directory, filename), "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            count += 1
+            total_bytes += int(metadata.get("imageBytes") or 0)
+        except Exception:
+            continue
+    return {"count": count, "bytes": total_bytes}
 
 
 def stable_pick(seed_text: str, options):
@@ -302,6 +394,7 @@ def read_fish_for_day(key: str):
         fish_name = ""
         species = ""
         bio = ""
+        created_at = 0
         meta_path = os.path.join(d, fish_id + ".json")
         if os.path.isfile(meta_path):
             try:
@@ -310,12 +403,13 @@ def read_fish_for_day(key: str):
                 fish_name = (meta.get("name") or "").strip()
                 species = (meta.get("species") or "").strip()
                 bio = (meta.get("bio") or "").strip()
+                created_at = int(meta.get("createdAt") or 0)
             except Exception:
                 pass
         out.append({
             "id": fish_id,
             "url": f"/submissions/{key}/{name}",
-            "createdAt": int(st.st_mtime * 1000),
+            "createdAt": created_at or int(st.st_mtime * 1000),
             "name": fish_name,
             "species": species,
             "bio": bio,
@@ -394,6 +488,16 @@ class Handler(BaseHTTPRequestHandler):
             return 403, "invalid reset token"
         return None, None
 
+    def _kiosk_auth_error(self):
+        if not KIOSK_TOKEN:
+            return None, None
+        if len(KIOSK_TOKEN) < 8:
+            return 503, "kiosk token is misconfigured"
+        supplied = (self.headers.get("X-Kiosk-Token") or "").strip()
+        if not secrets.compare_digest(supplied, KIOSK_TOKEN):
+            return 401, "kiosk authorization required"
+        return None, None
+
     def _client_key(self) -> str:
         forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
         if forwarded:
@@ -444,6 +548,12 @@ class Handler(BaseHTTPRequestHandler):
         if not head_only:
             self.wfile.write(body)
 
+    def _send_not_modified(self, etag: str):
+        self.send_response(304)
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
     def _send_file(self, path: str, cache: str = "public, max-age=300", head_only: bool = False):
         if not os.path.isfile(path):
             self.send_error(404, "Not found")
@@ -478,12 +588,42 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_file(os.path.join(PUBLIC, "aquarium.html"), cache="no-store", head_only=head_only)
         if path == "/privacy":
             return self._send_file(os.path.join(PUBLIC, "privacy.html"), cache="no-store", head_only=head_only)
+        if path == "/operator":
+            return self._send_file(os.path.join(PUBLIC, "operator.html"), cache="no-store", head_only=head_only)
 
         if path == "/api/fish":
             key = today_key()
             if CLEANUP_LOCAL_SUBMISSIONS:
                 cleanup_old_days()
-            return self._send_json(200, {"day": key, "fish": read_fish_for_day(key)}, head_only=head_only)
+            revision = read_day_revision(key)
+            if not revision:
+                with STORAGE_LOCK:
+                    revision = read_day_revision(key) or bump_day_revision(key)
+            etag = revision_etag(key, revision)
+            if self.headers.get("If-None-Match") == etag:
+                return self._send_not_modified(etag)
+            return self._send_json(200, {
+                "day": key,
+                "revision": revision,
+                "fish": read_fish_for_day(key),
+            }, {"ETag": etag, "Cache-Control": "no-cache"}, head_only=head_only)
+
+        if path == "/api/status":
+            status, error = self._reset_auth_error()
+            if status:
+                return self._send_json(status, {"error": error}, head_only=head_only)
+            key = today_key()
+            return self._send_json(200, {
+                "ok": True,
+                "day": key,
+                "timezone": APP_TIMEZONE,
+                "usage": day_usage(key),
+                "limits": {"submissions": MAX_DAILY_SUBMISSIONS, "bytes": MAX_DAILY_STORAGE_BYTES},
+                "revision": read_day_revision(key),
+                "kioskProtection": bool(KIOSK_TOKEN),
+                "aiDescriptions": bool(os.environ.get("HF_TOKEN")),
+                "checkedAt": int(time.time() * 1000),
+            }, head_only=head_only)
 
         if path.startswith("/submissions/"):
             rel = path[len("/submissions/"):]
@@ -507,7 +647,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
-        if parsed.path in ("/api/reset", "/api/describe", "/api/submit") and not self._same_origin():
+        if parsed.path in ("/api/reset", "/api/describe", "/api/submit", "/api/enrich") and not self._same_origin():
             return self._send_json(403, {"error": "cross-origin blocked"})
         if parsed.path == "/api/reset":
             if not self._enforce_rate_limit("reset"):
@@ -515,9 +655,15 @@ class Handler(BaseHTTPRequestHandler):
             status, error = self._reset_auth_error()
             if status:
                 return self._send_json(status, {"error": error})
-            reset_today()
-            return self._send_json(200, {"ok": True, "day": today_key()})
+            with STORAGE_LOCK:
+                reset_today()
+                key = today_key()
+                revision = bump_day_revision(key)
+            return self._send_json(200, {"ok": True, "day": key, "revision": revision})
         if parsed.path == "/api/describe":
+            status, error = self._kiosk_auth_error()
+            if status:
+                return self._send_json(status, {"error": error})
             if not self._enforce_rate_limit("describe"):
                 return
             length = int(self.headers.get("Content-Length") or 0)
@@ -547,9 +693,48 @@ class Handler(BaseHTTPRequestHandler):
             if fish_name:
                 described["nameSuggestion"] = ""
             return self._send_json(200, described)
+        if parsed.path == "/api/enrich":
+            status, error = self._kiosk_auth_error()
+            if status:
+                return self._send_json(status, {"error": error})
+            if not self._enforce_rate_limit("describe"):
+                return
+            length = int(self.headers.get("Content-Length") or 0)
+            if length <= 0 or length > 16 * 1024:
+                return self._send_json(413, {"error": "too large"})
+            try:
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            except Exception:
+                return self._send_json(400, {"error": "invalid json"})
+            key = str(payload.get("day") or "") if isinstance(payload, dict) else ""
+            fish_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
+            if key != today_key() or len(fish_id) != 16 or any(ch not in "0123456789abcdef" for ch in fish_id):
+                return self._send_json(400, {"error": "invalid submission"})
+            meta_path = os.path.join(day_dir(key), fish_id + ".json")
+            with STORAGE_LOCK:
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as handle:
+                        metadata = json.load(handle)
+                except Exception:
+                    return self._send_json(404, {"error": "submission not found"})
+                suggestion = sanitize_name(payload.get("nameSuggestion") or "")
+                bio = sanitize_bio(payload.get("bio") or "")
+                metadata["name"] = sanitize_name(metadata.get("name") or suggestion)
+                metadata["bio"] = bio or sanitize_bio(metadata.get("bio") or "")
+                atomic_write_json(meta_path, metadata)
+                revision = bump_day_revision(key)
+            return self._send_json(200, {
+                "ok": True,
+                "revision": revision,
+                "name": metadata["name"],
+                "bio": metadata["bio"],
+            })
         if parsed.path != "/api/submit":
             return self.send_error(404, "Not found")
 
+        status, error = self._kiosk_auth_error()
+        if status:
+            return self._send_json(status, {"error": error})
         if not self._enforce_rate_limit("submit"):
             return
         length = int(self.headers.get("Content-Length") or 0)
@@ -582,14 +767,28 @@ class Handler(BaseHTTPRequestHandler):
             bio = ""
 
         key = today_key()
+        if species not in SPECIES_LABELS:
+            return self._send_json(400, {"error": "invalid species"})
         d = day_dir(key)
-        os.makedirs(d, exist_ok=True)
-        fish_id = secrets.token_hex(8)
-        with open(os.path.join(d, fish_id + ".png"), "wb") as f:
-            f.write(buf)
-        if fish_name or species or bio:
-            with open(os.path.join(d, fish_id + ".json"), "w", encoding="utf-8") as f:
-                json.dump({"name": fish_name, "species": species, "bio": bio}, f)
+        with STORAGE_LOCK:
+            usage = day_usage(key)
+            if usage["count"] >= MAX_DAILY_SUBMISSIONS or usage["bytes"] + len(buf) > MAX_DAILY_STORAGE_BYTES:
+                return self._send_json(503, {"error": "aquarium capacity reached; ask an operator to reset it"})
+            os.makedirs(d, exist_ok=True)
+            fish_id = secrets.token_hex(8)
+            dimensions = png_dimensions(buf) or (0, 0)
+            metadata = {
+                "name": fish_name,
+                "species": species,
+                "bio": bio,
+                "createdAt": int(time.time() * 1000),
+                "imageBytes": len(buf),
+                "width": dimensions[0],
+                "height": dimensions[1],
+            }
+            atomic_write_json(os.path.join(d, fish_id + ".json"), metadata)
+            atomic_write_bytes(os.path.join(d, fish_id + ".png"), buf)
+            revision = bump_day_revision(key)
 
         return self._send_json(200, {
             "id": fish_id,
@@ -598,6 +797,7 @@ class Handler(BaseHTTPRequestHandler):
             "name": fish_name,
             "species": species,
             "bio": bio,
+            "revision": revision,
         })
 
     # Quieter console
@@ -622,6 +822,9 @@ def main():
         print("  (set HOST=0.0.0.0 to expose on the LAN for kiosk devices.)")
     if len(RESET_TOKEN) < 8:
         print("  (set RESET_TOKEN to at least 8 characters to enable aquarium reset.)")
+    if not KIOSK_TOKEN:
+        print("  (set KIOSK_TOKEN to protect public submission and AI endpoints.)")
+    print(f"  Event timezone: {APP_TIMEZONE}")
     if not CLEANUP_LOCAL_SUBMISSIONS:
         print("  (local old-day cleanup is disabled; unset CLEANUP_LOCAL_SUBMISSIONS or set it to 1 to enable.)")
     try:

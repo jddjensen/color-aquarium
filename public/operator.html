@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Staff Controls — Coloring Fish</title>
+  <link rel="stylesheet" href="/style.css?v=2" />
+</head>
+<body class="operator-page">
+  <main class="operator-shell">
+    <header class="operator-header">
+      <div>
+        <p class="operator-kicker">Coloring Fish 2.0</p>
+        <h1>Staff Controls</h1>
+        <p>Authorize this device, check the live exhibit, and reset today’s aquarium.</p>
+      </div>
+      <nav aria-label="Exhibit pages">
+        <a class="big-btn" href="/color">Coloring iPad</a>
+        <a class="big-btn primary" href="/aquarium">Aquarium TV</a>
+      </nav>
+    </header>
+
+    <section class="operator-panel" aria-labelledby="deviceSetupTitle">
+      <h2 id="deviceSetupTitle">Device setup</h2>
+      <p>Codes stay in this browser tab session and are never written into the site.</p>
+      <div class="operator-form-grid">
+        <label>Kiosk code
+          <input id="kioskToken" type="password" autocomplete="off" minlength="8" placeholder="For submitting fish" />
+        </label>
+        <label>Reset code
+          <input id="resetToken" type="password" autocomplete="off" minlength="8" placeholder="For staff status and reset" />
+        </label>
+      </div>
+      <div class="operator-buttons">
+        <button type="button" class="btn-submit" id="saveCodes">Save on this device</button>
+        <button type="button" class="btn-undo" id="refreshStatus">Check status</button>
+        <button type="button" class="btn-clear" id="clearCodes">Forget codes</button>
+      </div>
+      <p id="operatorMessage" class="operator-message" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="operator-panel" aria-labelledby="liveStatusTitle">
+      <div class="operator-title-row">
+        <h2 id="liveStatusTitle">Live status</h2>
+        <span id="connectionBadge" class="status-badge">Not checked</span>
+      </div>
+      <dl class="status-grid">
+        <div><dt>Event day</dt><dd id="statusDay">—</dd></div>
+        <div><dt>Timezone</dt><dd id="statusTimezone">—</dd></div>
+        <div><dt>Fish</dt><dd id="statusFish">—</dd></div>
+        <div><dt>Storage</dt><dd id="statusStorage">—</dd></div>
+        <div><dt>Kiosk protection</dt><dd id="statusKiosk">—</dd></div>
+        <div><dt>AI descriptions</dt><dd id="statusAi">—</dd></div>
+        <div><dt>Last check</dt><dd id="statusChecked">—</dd></div>
+        <div><dt>Network</dt><dd id="statusNetwork">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="operator-panel danger-panel" aria-labelledby="resetTitle">
+      <h2 id="resetTitle">Reset today’s aquarium</h2>
+      <p>This removes all fish from today and cannot be undone.</p>
+      <button type="button" class="danger-button" id="resetAquarium">Reset Aquarium</button>
+    </section>
+  </main>
+  <script type="module" src="/operator.js?v=2"></script>
+</body>
+</html>

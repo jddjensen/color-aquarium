@@ -7,19 +7,23 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>Virtual Aquarium — Loveland Living Planet Aquarium</title>
   <link rel="preload" as="image" href="/assets/Background.jpg" />
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=2" />
 </head>
 <body class="aquarium">
   <div class="aquarium-topbar">
-    <span id="count">0 fish today</span>
+    <span id="count" role="status" aria-live="polite">0 fish today</span>
     <img
       class="aquarium-topbar-llpa"
       src="/assets/llpa/llpa-horizontal-color-white-text-cropped.png"
       alt="Loveland Living Planet Aquarium"
     />
-    <a href="/color">+ Add a fish</a>
+    <span class="aquarium-actions">
+      <a href="/color">+ Add a fish</a>
+      <a class="staff-link" href="/operator" aria-label="Open staff controls">⚙ Staff</a>
+    </span>
   </div>
   <div id="aquarium">
+    <canvas id="threeAquarium" aria-hidden="true"></canvas>
     <canvas id="caustics" aria-hidden="true"></canvas>
     <div class="tank-ambience" aria-hidden="true">
       <div class="light-curtain curtain-1"></div>
@@ -62,7 +66,6 @@
     <div class="seaweed sw5"></div>
     <div class="seaweed sw6"></div>
   </div>
-  <button id="resetHotspot" type="button" aria-label="Reset aquarium" title=""></button>
-  <script src="/aquarium.js"></script>
+  <script type="module" src="/aquarium.js?v=2"></script>
 </body>
 </html>

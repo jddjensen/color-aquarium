@@ -1,6 +1,13 @@
 import { getStore } from "@netlify/blobs";
-import { createHash } from "node:crypto";
-import { purgeOldDaysFromStore, responseHeaders, todayKey } from "./_shared.mjs";
+import {
+  bumpDayRevision,
+  etagMatches,
+  FISH_STORE,
+  readDayRevision,
+  responseHeaders,
+  revisionEtag,
+  todayKey,
+} from "./_shared.mjs";
 
 // GET /api/fish  — returns today's fish list. Hourly scheduled cleanup is the
 // main retention path; this tiny opportunistic purge is a backup if scheduled
@@ -8,10 +15,15 @@ import { purgeOldDaysFromStore, responseHeaders, todayKey } from "./_shared.mjs"
 export default async (req) => {
   const day = todayKey();
   // Strong consistency — otherwise list() can lag new submissions by 10–60 s.
-  const store = getStore({ name: "fish", consistency: "strong" });
-
-  if (Math.random() < 0.1) {
-    purgeOldDaysFromStore(store, day).catch((e) => console.warn("purge failed", e));
+  const store = getStore({ name: FISH_STORE, consistency: "strong" });
+  let revision = await readDayRevision(store, day);
+  if (!revision) revision = await bumpDayRevision(store, day);
+  const etag = revisionEtag(day, revision);
+  if (etagMatches(req?.headers?.get("if-none-match"), etag)) {
+    return new Response(null, {
+      status: 304,
+      headers: responseHeaders({ "ETag": etag, "Cache-Control": "no-cache" }),
+    });
   }
 
   const { blobs } = await store.list({ prefix: `${day}/` });
@@ -56,18 +68,7 @@ export default async (req) => {
   );
 
   results.sort((a, b) => a.createdAt - b.createdAt);
-  const etag = makeEtag(day, results);
-  if (etagMatches(req?.headers?.get("if-none-match"), etag)) {
-    return new Response(null, {
-      status: 304,
-      headers: responseHeaders({
-        "ETag": etag,
-        "Cache-Control": "no-cache",
-      }),
-    });
-  }
-
-  return new Response(JSON.stringify({ day, fish: results }), {
+  return new Response(JSON.stringify({ day, revision, fish: results }), {
     status: 200,
     headers: responseHeaders({
       "Content-Type": "application/json; charset=utf-8",
@@ -76,19 +77,5 @@ export default async (req) => {
     }),
   });
 };
-
-function makeEtag(day, results) {
-  const hash = createHash("sha1")
-    .update(JSON.stringify([day, results]))
-    .digest("base64url")
-    .slice(0, 24);
-  return `"fish-${hash}"`;
-}
-
-function etagMatches(header, etag) {
-  if (!header) return false;
-  if (header.trim() === "*") return true;
-  return header.split(",").map((value) => value.trim()).includes(etag);
-}
 
 export const config = { path: "/api/fish" };

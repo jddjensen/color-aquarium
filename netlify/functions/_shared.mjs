@@ -1,5 +1,5 @@
 import { getStore } from "@netlify/blobs";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 // Shared helpers for the API functions. Underscore-prefixed and exports no
 // default — Netlify won't mount it as a route, but esbuild bundles it into
@@ -8,6 +8,30 @@ import { createHash, timingSafeEqual } from "node:crypto";
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 export const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
 export const RATE_LIMIT_STORE = "fish-rate-limits";
+export const FISH_STORE = "fish";
+export const CAPACITY_STORE = "fish-capacity";
+export const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+export const MAX_IMAGE_WIDTH = 1600;
+export const MAX_IMAGE_HEIGHT = 1200;
+export const MAX_IMAGE_PIXELS = 2_000_000;
+
+export const SPECIES_LABELS = {
+  fish1: "Goldie",
+  fish2: "Angel",
+  fish3: "Clown",
+  fish4: "Angler Fish",
+  fish5: "Tropical Fish",
+  puffer1: "Puffer",
+  seahorse1: "Seahorse",
+  eel1: "Eel",
+  stingray1: "Sting Ray",
+  seaslug1: "Sea Slug",
+  shark1: "Shark",
+  octo1: "Octopus",
+  shrimp1: "Shrimp",
+  squid1: "Squid",
+  seastar1: "Sea Star",
+};
 
 const RATE_LIMIT_DEFAULTS = {
   submit: { limit: 20, windowMs: 60 * 1000 },
@@ -82,24 +106,37 @@ export function decodePngDataUrl(value, { maxBytes = 12 * 1024 * 1024 } = {}) {
     return { ok: false, status: 413, error: "too large" };
   }
   if (!isPngBuffer(buffer)) return { ok: false, status: 400, error: "not a png" };
-  return { ok: true, buffer };
+  const dimensions = pngDimensions(buffer);
+  if (!dimensions) return { ok: false, status: 400, error: "invalid png header" };
+  if (dimensions.width > MAX_IMAGE_WIDTH || dimensions.height > MAX_IMAGE_HEIGHT
+      || dimensions.width * dimensions.height > MAX_IMAGE_PIXELS) {
+    return { ok: false, status: 413, error: "image dimensions too large" };
+  }
+  return { ok: true, buffer, ...dimensions };
 }
 
-// Day key in the timezone configured by the TZ env var on Netlify. Without TZ
-// set this is UTC, which silently rolls the day over mid-event for evening
-// shows in the Americas. We log once at cold start so misconfiguration is
-// visible in function logs.
-let warnedAboutTZ = false;
+export function pngDimensions(buffer) {
+  if (!isPngBuffer(buffer) || buffer.length < 24) return null;
+  if (buffer.toString("ascii", 12, 16) !== "IHDR") return null;
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  if (!width || !height) return null;
+  return { width, height };
+}
+
+export const APP_TIMEZONE = process.env.APP_TIMEZONE || process.env.TZ || "America/Denver";
+
+// Day keys are explicitly formatted in the exhibit timezone so function-host
+// process settings cannot silently move an evening event into the next day.
 export function todayKey() {
-  if (!process.env.TZ && !warnedAboutTZ) {
-    warnedAboutTZ = true;
-    console.warn("TZ env var is unset — day rollover will use UTC. Set TZ on the Netlify site config (e.g. America/New_York) to roll over at local midnight.");
-  }
-  const d = new Date();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((part) => part.type === type)?.value || "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
 // CSRF / public-write guard: browsers send Origin on same-origin POST fetches.
@@ -149,6 +186,26 @@ export function requireResetToken(req) {
     };
   }
   return { ok: true };
+}
+
+export function requireKioskToken(req) {
+  const expected = (process.env.KIOSK_TOKEN || "").trim();
+  // Optional in development, but production documentation requires it.
+  if (!expected) return { ok: true, configured: false };
+  if (expected.length < 8) {
+    return {
+      ok: false,
+      response: jsonResponse(503, { error: "kiosk token is misconfigured" }),
+    };
+  }
+  const supplied = (req.headers.get("x-kiosk-token") || "").trim();
+  if (!constantTimeEqual(supplied, expected)) {
+    return {
+      ok: false,
+      response: jsonResponse(401, { error: "kiosk authorization required" }),
+    };
+  }
+  return { ok: true, configured: true };
 }
 
 function constantTimeEqual(a, b) {
@@ -248,11 +305,109 @@ export async function purgeApplicationStores(today = todayKey()) {
   const stores = [
     getStore({ name: "fish", consistency: "strong" }),
     getStore({ name: RATE_LIMIT_STORE, consistency: "strong" }),
+    getStore({ name: CAPACITY_STORE, consistency: "strong" }),
   ];
-  const [fish, rateLimits] = await Promise.all(
+  const [fish, rateLimits, capacity] = await Promise.all(
     stores.map((store) => purgeOldDaysFromStore(store, today))
   );
-  return { fish, rateLimits };
+  return { fish, rateLimits, capacity };
+}
+
+export function revisionKey(day) {
+  return `${day}/_revision.json`;
+}
+
+export async function readDayRevision(store, day) {
+  try {
+    const record = await store.get(revisionKey(day), { type: "json" });
+    return typeof record?.value === "string" ? record.value : "";
+  } catch {
+    return "";
+  }
+}
+
+export async function bumpDayRevision(store, day) {
+  const value = `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
+  await store.setJSON(revisionKey(day), { value, updatedAt: Date.now() });
+  return value;
+}
+
+export function revisionEtag(day, revision) {
+  const hash = createHash("sha1").update(`${day}:${revision}`).digest("base64url").slice(0, 24);
+  return `"fish-${hash}"`;
+}
+
+export function etagMatches(header, etag) {
+  if (!header) return false;
+  if (header.trim() === "*") return true;
+  return header.split(",").map((value) => value.trim()).includes(etag);
+}
+
+export async function getDayUsage(store, day) {
+  const { blobs } = await store.list({ prefix: `${day}/` });
+  const metaKeys = blobs
+    .map((blob) => blob.key)
+    .filter((key) => /^[^/]+\/[a-f0-9]{16}\.json$/.test(key));
+  let bytes = 0;
+  const records = await Promise.all(metaKeys.map(async (key) => {
+    try { return await store.get(key, { type: "json" }); } catch { return null; }
+  }));
+  for (const record of records) bytes += Number(record?.imageBytes) || 0;
+  return { count: metaKeys.length, bytes };
+}
+
+export async function requireDailyCapacity(_fishStore, day, incomingBytes) {
+  const maxCount = positiveIntegerEnv("MAX_DAILY_SUBMISSIONS", 500);
+  const maxBytes = positiveIntegerEnv("MAX_DAILY_STORAGE_BYTES", 250 * 1024 * 1024);
+  const store = getStore({ name: CAPACITY_STORE, consistency: "strong" });
+  const key = `${day}/usage.json`;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const entry = await store.getWithMetadata(key, { type: "json" });
+    const usage = {
+      count: Number(entry?.data?.count) || 0,
+      bytes: Number(entry?.data?.bytes) || 0,
+    };
+    if (usage.count >= maxCount || usage.bytes + incomingBytes > maxBytes) {
+      return {
+        ok: false,
+        response: jsonResponse(503, { error: "aquarium capacity reached; ask an operator to reset it" }),
+      };
+    }
+    const next = { count: usage.count + 1, bytes: usage.bytes + incomingBytes, updatedAt: Date.now() };
+    const result = await store.setJSON(key, next, entry
+      ? { onlyIfMatch: entry.etag }
+      : { onlyIfNew: true });
+    if (result.modified) {
+      return { ok: true, usage: next, limits: { count: maxCount, bytes: maxBytes }, reservation: { day, bytes: incomingBytes } };
+    }
+  }
+  return { ok: false, response: jsonResponse(503, { error: "aquarium is busy; please try again" }) };
+}
+
+export async function releaseDailyCapacity(day, releasedBytes) {
+  const store = getStore({ name: CAPACITY_STORE, consistency: "strong" });
+  const key = `${day}/usage.json`;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const entry = await store.getWithMetadata(key, { type: "json" });
+    if (!entry) return;
+    const next = {
+      count: Math.max(0, (Number(entry.data?.count) || 0) - 1),
+      bytes: Math.max(0, (Number(entry.data?.bytes) || 0) - releasedBytes),
+      updatedAt: Date.now(),
+    };
+    const result = await store.setJSON(key, next, { onlyIfMatch: entry.etag });
+    if (result.modified) return;
+  }
+}
+
+export async function resetDailyCapacity(day) {
+  const store = getStore({ name: CAPACITY_STORE, consistency: "strong" });
+  await store.delete(`${day}/usage.json`);
+}
+
+export function sanitizeAndValidateSpecies(value) {
+  const species = sanitizeSpecies(value);
+  return SPECIES_LABELS[species] ? species : "";
 }
 
 export function normalizeSpace(value) {

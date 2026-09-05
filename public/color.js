@@ -1,23 +1,7 @@
+import { apiJson } from './js/api-client.js';
+import { FISH } from './js/catalog.js';
+
 // ---------- Config ----------
-// Aquarium animals. The `id` becomes the stored species and drives behavior
-// (habitat, locomotion, ecosystem role) on the aquarium side.
-const FISH = [
-  { id: 'fish1',    src: '/assets/fish1.png',    label: 'Goldie' },
-  { id: 'fish2',    src: '/assets/fish2.png',    label: 'Angel' },
-  { id: 'fish3',    src: '/assets/fish3.png',    label: 'Clown' },
-  { id: 'fish4',    src: '/assets/fish4.png',    label: 'Angler Fish' },
-  { id: 'fish5',    src: '/assets/fish5.png',    label: 'Tropical' },
-  { id: 'puffer1',  src: '/assets/Puffer1.png',  label: 'Puffer' },
-  { id: 'seahorse1',src: '/assets/seahorse1.png',label: 'Seahorse' },
-  { id: 'eel1',     src: '/assets/eel1.png',     label: 'Eel' },
-  { id: 'stingray1',src: '/assets/stingray1.png',label: 'Sting Ray' },
-  { id: 'seaslug1', src: '/assets/seaslug1.png', label: 'Sea Slug' },
-  { id: 'shark1',   src: '/assets/shark1.png',   label: 'Shark' },
-  { id: 'octo1',    src: '/assets/octo1.png',    label: 'Octopus' },
-  { id: 'shrimp1',  src: '/assets/shrimp1.png',  label: 'Shrimp' },
-  { id: 'squid1',   src: '/assets/squid1.png',   label: 'Squid' },
-  { id: 'seastar1', src: '/assets/seastar1.png', label: 'Sea Star' },
-];
 
 const PALETTE = [
   // Reds
@@ -40,6 +24,13 @@ const PALETTE = [
   '#a2845e', '#8b4513', '#d2b48c', '#3e2723',
   // Neutrals
   '#000000', '#666666', '#c0c0c0', '#ffffff',
+];
+const COLOR_NAMES = [
+  'red', 'coral red', 'dark red', 'magenta', 'orange', 'salmon', 'deep orange', 'brown orange',
+  'yellow', 'lemon yellow', 'gold', 'amber', 'green', 'lime green', 'light green', 'dark teal',
+  'turquoise', 'light cyan', 'aqua', 'sky blue', 'blue', 'bright blue', 'navy', 'dark blue',
+  'indigo', 'violet', 'purple', 'deep purple', 'pink', 'rose pink', 'light pink', 'hot pink',
+  'tan', 'brown', 'sand', 'dark brown', 'black', 'gray', 'silver', 'white',
 ];
 
 // Pixels this dark (sum of rgb) on the line art are treated as "line" (fill barrier).
@@ -295,14 +286,21 @@ FISH.forEach((f) => {
   card.className = 'fish-card';
   card.dataset.fishId = f.id;
   const img = document.createElement('img');
-  img.src = f.src;
-  img.alt = f.label;
+  img.src = f.thumbnail || f.src;
+  img.alt = '';
+  img.loading = 'lazy';
+  img.decoding = 'async';
   const label = document.createElement('span');
   label.textContent = f.label;
   card.append(img, label);
+  card.setAttribute('aria-pressed', 'false');
   card.addEventListener('click', () => {
-    document.querySelectorAll('.fish-card').forEach((c) => c.classList.remove('active'));
+    document.querySelectorAll('.fish-card').forEach((c) => {
+      c.classList.remove('active');
+      c.setAttribute('aria-pressed', 'false');
+    });
     card.classList.add('active');
+    card.setAttribute('aria-pressed', 'true');
     pendingFish = f;
     acceptBtn.disabled = false;
   });
@@ -329,6 +327,7 @@ function enterColoringView(fish) {
     coloringViewEl.classList.add('entering');
     requestAnimationFrame(() => coloringViewEl.classList.remove('entering'));
     loadFish(fish);
+    changeFishBtn.focus({ preventScroll: true });
   }, 350);
 }
 
@@ -339,6 +338,7 @@ function returnToSelectView() {
   const nameInput = document.getElementById('fishName');
   if (nameInput) nameInput.value = '';
   document.querySelectorAll('.fish-card').forEach((c) => c.classList.remove('active'));
+  document.querySelectorAll('.fish-card').forEach((c) => c.setAttribute('aria-pressed', 'false'));
   pendingFish = null;
   currentFish = null;
   acceptBtn.disabled = true;
@@ -351,6 +351,7 @@ function returnToSelectView() {
     fishSelectEl.hidden = false;
     fishSelectEl.classList.add('leaving');
     requestAnimationFrame(() => fishSelectEl.classList.remove('leaving'));
+    document.querySelector('.fish-card')?.focus({ preventScroll: true });
   }, 300);
 }
 
@@ -472,7 +473,7 @@ async function describeFishArt(dataUrl, fish, userName) {
   const timer = setTimeout(() => controller.abort(), 12000);
   try {
     const previewDataUrl = await resizeDataUrl(dataUrl, 384);
-    const r = await fetch('/api/describe', {
+    const data = await apiJson('/api/describe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -483,8 +484,6 @@ async function describeFishArt(dataUrl, fish, userName) {
       }),
       signal: controller.signal,
     });
-    if (!r.ok) throw new Error('describe failed');
-    const data = await r.json();
     return {
       nameSuggestion: sanitizeSuggestedName(data.nameSuggestion || ''),
       bio: sanitizeBio(data.bio || ''),
@@ -502,7 +501,7 @@ PALETTE.forEach((c, i) => {
   sw.type = 'button';
   sw.className = 'swatch' + (i === 0 ? ' active' : '');
   sw.style.background = c;
-  sw.setAttribute('aria-label', `Color ${c}`);
+  sw.setAttribute('aria-label', `Color ${COLOR_NAMES[i] || c}`);
   sw.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
   sw.addEventListener('click', () => {
     document.querySelectorAll('.swatch').forEach(s => {
@@ -517,9 +516,14 @@ PALETTE.forEach((c, i) => {
 });
 
 document.querySelectorAll('.tool-btn').forEach(b => {
+  b.setAttribute('aria-pressed', b.classList.contains('active') ? 'true' : 'false');
   b.addEventListener('click', () => {
-    document.querySelectorAll('.tool-btn').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.tool-btn').forEach(x => {
+      x.classList.remove('active');
+      x.setAttribute('aria-pressed', 'false');
+    });
     b.classList.add('active');
+    b.setAttribute('aria-pressed', 'true');
     currentTool = b.dataset.tool;
     // Only bother with the cursor swap on devices that actually have a cursor.
     if (!DEVICE.isMobile) {
@@ -547,13 +551,18 @@ STICKERS.forEach((s, i) => {
   sw.type = 'button';
   sw.className = 'sticker-swatch' + (i === 0 ? ' active' : '');
   sw.title = s.label;
+  sw.setAttribute('aria-pressed', i === 0 ? 'true' : 'false');
   const swImg = document.createElement('img');
   swImg.src = url;
   swImg.alt = s.label;
   sw.appendChild(swImg);
   sw.addEventListener('click', () => {
-    document.querySelectorAll('.sticker-swatch').forEach(x => x.classList.remove('active'));
+    document.querySelectorAll('.sticker-swatch').forEach(x => {
+      x.classList.remove('active');
+      x.setAttribute('aria-pressed', 'false');
+    });
     sw.classList.add('active');
+    sw.setAttribute('aria-pressed', 'true');
     currentSticker = s.id;
   });
   stickersEl.appendChild(sw);
@@ -1066,18 +1075,8 @@ async function submit() {
   btn.textContent = 'Polishing scales...';
   try {
     const rawDataUrl = exportFishPng();
-    const [enhancedResult, describeResult] = await Promise.allSettled([
-      enhanceFishArtwork(rawDataUrl),
-      describeFishArt(rawDataUrl, currentFish, fishName),
-    ]);
-    const dataUrl = enhancedResult.status === 'fulfilled' && enhancedResult.value
-      ? enhancedResult.value
-      : rawDataUrl;
-    const describe = describeResult.status === 'fulfilled' && describeResult.value
-      ? describeResult.value
-      : { nameSuggestion: '', bio: '' };
-    const savedName = fishName || describe.nameSuggestion || '';
-    const savedBio = describe.bio || '';
+    const dataUrl = await enhanceFishArtwork(rawDataUrl);
+    const submittedFish = currentFish;
 
     btn.textContent = 'Swimming away...';
     // 20s ceiling — Netlify functions cap at 10s on the free tier, so a
@@ -1086,25 +1085,26 @@ async function submit() {
     // (or function) hangs.
     const submitController = new AbortController();
     const submitTimer = setTimeout(() => submitController.abort(), 20000);
-    let r;
+    let saved;
     try {
-      r = await fetch('/api/submit', {
+      saved = await apiJson('/api/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           image: dataUrl,
-          name: savedName,
-          species: currentFish.id,
-          bio: savedBio,
+          name: fishName,
+          species: submittedFish.id,
         }),
         signal: submitController.signal,
       });
     } finally {
       clearTimeout(submitTimer);
     }
-    if (!r.ok) throw new Error('submit failed');
-    const saved = await r.json();
-    const finalName = (saved.name || savedName || '').trim();
+    const finalName = (saved.name || fishName || '').trim();
+
+    // Description generation is optional enrichment. It never delays the
+    // podium-to-TV handoff and quietly updates the fish after arrival.
+    void enrichSubmittedFish(saved, dataUrl, submittedFish, fishName);
 
     // Kick off the swim-off animation and the "Look up!" banner in parallel.
     // The TV polls every ~1.2s and then runs a ~650ms cinematic ramp, so the
@@ -1128,11 +1128,32 @@ async function submit() {
   } catch (e) {
     console.error(e);
     hideLookUpBanner();
-    toast('Oops — could not send your fish. Try again!');
+    toast(e?.status === 401
+      ? 'This iPad needs staff authorization. Open Staff Setup.'
+      : 'Oops — could not send your fish. Try again!');
   } finally {
     btn.textContent = original;
     submitInFlight = false;
     updateSubmitState();
+  }
+}
+
+async function enrichSubmittedFish(saved, dataUrl, fish, fishName) {
+  const description = await describeFishArt(dataUrl, fish, fishName);
+  if (!description.nameSuggestion && !description.bio) return;
+  try {
+    await apiJson('/api/enrich', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: saved.id,
+        day: saved.day,
+        nameSuggestion: description.nameSuggestion,
+        bio: description.bio,
+      }),
+    });
+  } catch (error) {
+    console.warn('fish enrichment failed', error);
   }
 }
 

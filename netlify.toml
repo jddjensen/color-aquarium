@@ -1,4 +1,5 @@
 [build]
+  command = "pnpm run build"
   publish = "public"
   functions = "netlify/functions"
 
@@ -17,6 +18,11 @@
 [[redirects]]
   from = "/privacy"
   to = "/privacy.html"
+  status = 200
+
+[[redirects]]
+  from = "/operator"
+  to = "/operator.html"
   status = 200
 
 # API + blob image routes are handled by serverless functions.
@@ -39,6 +45,16 @@
 [[redirects]]
   from = "/api/reset"
   to = "/.netlify/functions/reset"
+  status = 200
+
+[[redirects]]
+  from = "/api/enrich"
+  to = "/.netlify/functions/enrich"
+  status = 200
+
+[[redirects]]
+  from = "/api/status"
+  to = "/.netlify/functions/status"
   status = 200
 
 [[redirects]]

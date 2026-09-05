@@ -1,7 +1,7 @@
 # Security Review
 
 Date: 2026-05-22
-Updated: 2026-06-14
+Updated: 2026-09-03
 
 Scope: static pages, browser JavaScript, Netlify Functions, Netlify headers, and the local `server.py` development server.
 
@@ -54,3 +54,16 @@ Set `RESET_TOKEN` in Netlify before relying on the hidden reset button in produc
 If `HF_TOKEN` is configured, `/api/describe` sends a reduced PNG preview, fish species, and optional name to Hugging Face for the generated bio. Without `HF_TOKEN`, descriptions fall back locally.
 
 This review did not include a dynamic penetration test of the deployed Netlify site.
+
+## September 2026 Hardening
+
+- Public write functions now use Netlify platform rate limits instead of a non-atomic Blob read/modify/write counter.
+- Optional `KIOSK_TOKEN` authorization restricts submit, describe, and enrichment calls to configured exhibit devices.
+- PNG uploads are capped at 3 MiB and validated for IHDR dimensions, maximum width/height, and total pixels.
+- Known species are allow-listed server-side.
+- Daily submission and storage ceilings use conditional Blob writes so concurrent requests cannot over-reserve capacity.
+- Metadata is committed before its PNG marker, preventing the TV from discovering partially published submissions.
+- Fish list polling checks one revision object before listing metadata, dramatically reducing idle read volume.
+- Child artwork responses now use `private, no-store` caching.
+- Staff health and reset operations live on `/operator` and require the reset token.
+- Three.js is pinned, built locally, and served from the same origin under the existing strict CSP.

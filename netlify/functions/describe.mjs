@@ -4,7 +4,7 @@ import {
   jsonResponse,
   normalizeSpace,
   requestBodyTooLarge,
-  requireRateLimit,
+  requireKioskToken,
   sanitizeBio,
   sanitizeName,
   sanitizeSpecies,
@@ -37,11 +37,11 @@ function resolveSpeciesLabel(species, suppliedLabel) {
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
   if (!isSameOrigin(req)) return jsonResponse(403, { error: "cross-origin blocked" });
+  const kiosk = requireKioskToken(req);
+  if (!kiosk.ok) return kiosk.response;
   if (requestBodyTooLarge(req, 2 * 1024 * 1024)) {
     return jsonResponse(413, { error: "too large" });
   }
-  const rate = await requireRateLimit(req, "describe");
-  if (!rate.ok) return rate.response;
 
   let payload;
   try {
@@ -171,4 +171,7 @@ async function hfDescribeFish(image, speciesLabel, rawName) {
   return null;
 }
 
-export const config = { path: "/api/describe" };
+export const config = {
+  path: "/api/describe",
+  rateLimit: { windowLimit: 30, windowSize: 60, aggregateBy: ["ip", "domain"] },
+};

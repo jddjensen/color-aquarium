@@ -1,3 +1,17 @@
+import { createThreeAquarium } from './js/three-aquarium.js';
+import {
+  DEFAULT_ARRIVAL,
+  DEFAULT_PERSONALITY,
+  DEFAULT_TRAITS,
+  PATTERNS,
+  PERSONALITIES,
+  PERSONALITY_ORDER,
+  SPECIES_ARRIVALS,
+  SPECIES_TRAITS,
+  TERRITORIAL_SPECIES,
+  TERRITORY_RADIUS,
+} from './js/aquarium-config.js';
+
 const aq = document.getElementById('aquarium');
 const countEl = document.getElementById('count');
 const bubblesLayer = document.getElementById('bubbles');
@@ -107,6 +121,10 @@ document.documentElement.classList.toggle('is-low-power', DEVICE.lowPower);
 // Low-power devices (iPhone 12 mini, older Androids) get the reduced-motion
 // codepath automatically — fewer particles, no cinematic zoom, no WebGL.
 if (DEVICE.lowPower) REDUCE_MOTION = true;
+const threeAquarium = createThreeAquarium(document.getElementById('threeAquarium'), {
+  enabled: (DISPLAY_PARAMS.has('threeRenderer') || !DEVICE.lowPower) && !DISPLAY_PARAMS.has('domRenderer'),
+});
+document.documentElement.classList.toggle('three-aquarium-active', threeAquarium.active);
 
 // ---- Day/night tint: warm→cool filter sweep by local hour ----
 const TINT_KEYFRAMES = [
@@ -175,8 +193,6 @@ function mulberry32(seed) {
   };
 }
 
-const PATTERNS = ['wavy', 'darter', 'circler', 'glider', 'zigzag'];
-
 // ---- Species traits: habitat, locomotion, ecosystem role ----
 // yMinF/yMaxF are fractions of viewport height (0 = top, 1 = bottom).
 // locomotion drives wiggle style: swimmer (default), floater (seahorse),
@@ -185,69 +201,15 @@ const PATTERNS = ['wavy', 'darter', 'circler', 'glider', 'zigzag'];
 // walker (shrimp — scuttles on the floor, legs hop),
 // clinger (sea star — almost motionless on the floor),
 // jetter (octopus / squid — tentacle-pulse jet propulsion).
-const SPECIES_TRAITS = {
-  fish1:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.70, speedMul: 1.00 },
-  fish2:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
-  fish3:     { locomotion: 'swimmer',   yMinF: 0.15, yMaxF: 0.65, speedMul: 1.00 },
-  fish4:     { locomotion: 'swimmer',   yMinF: 0.18, yMaxF: 0.68, speedMul: 1.00 },
-  fish5:     { locomotion: 'swimmer',   yMinF: 0.20, yMaxF: 0.72, speedMul: 1.00 },
-  puffer1:   { locomotion: 'swimmer',   yMinF: 0.28, yMaxF: 0.75, speedMul: 0.75 },
-  seahorse1: { locomotion: 'floater',   yMinF: 0.25, yMaxF: 0.70, speedMul: 0.45 },
-  eel1:      { locomotion: 'slitherer', yMinF: 0.70, yMaxF: 0.90, speedMul: 0.70, ampMul: 2.6, freqMul: 0.85 },
-  stingray1: { locomotion: 'glider',    yMinF: 0.72, yMaxF: 0.90, speedMul: 0.70, ampMul: 0.30, flap: true },
-  seaslug1:  { locomotion: 'crawler',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.20, ampMul: 0.25, freqMul: 0.45, glide: true },
-  shark1:    { locomotion: 'predator',  yMinF: 0.35, yMaxF: 0.82, speedMul: 0.85, sizeMul: 1.75, intimidateRadius: 260 },
-  // Sea star — barely moves, clings to the floor. Zero body wiggle.
-  seastar1:  { locomotion: 'clinger',   yMinF: 0.90, yMaxF: 0.97, speedMul: 0.08, ampMul: 0.0,  sizeMul: 0.55 },
-  // Shrimp — scuttles along the bottom, legs-in-motion hop via fast wigglePhase.
-  shrimp1:   { locomotion: 'walker',    yMinF: 0.86, yMaxF: 0.96, speedMul: 0.35, ampMul: 0.0,  freqMul: 2.6, sizeMul: 0.58, legs: true },
-  // Octopus — mid-depth jet propulsion, tentacle pulses (slow continuous).
-  octo1:     { locomotion: 'jetter',    yMinF: 0.40, yMaxF: 0.85, speedMul: 0.55, ampMul: 0.0,  freqMul: 0.8, sizeMul: 0.95, jetPulse: true },
-  // Squid — upper/mid water, faster bursty jets with snappier pulses.
-  squid1:    { locomotion: 'jetter',    yMinF: 0.22, yMaxF: 0.68, speedMul: 0.85, ampMul: 0.0,  freqMul: 1.1, sizeMul: 0.90, jetPulse: true, burst: true },
-};
-const DEFAULT_TRAITS = { locomotion: 'swimmer', yMinF: 0.15, yMaxF: 0.80, speedMul: 1.0 };
-
 // ---- Personalities: archetypes that tune existing behavior weights ----
 // Each fish rolls one on spawn (deterministic by id) and it shifts how eagerly
 // it socializes, flees, visits the glass, and idles. Numbers are multipliers
 // over the baseline — nothing new is introduced behaviorally, the fish just
 // leans one way. Keeps the tank feeling like individuals, not clones.
-const PERSONALITIES = {
-  shy:     { id: 'shy',     encounterK: 0.55, glassK: 0.45, scareMul: 1.45, cohesionK: 1.30, idleBoost: 1.15 },
-  bold:    { id: 'bold',    encounterK: 1.55, glassK: 1.80, scareMul: 0.65, cohesionK: 0.85, idleBoost: 0.80 },
-  curious: { id: 'curious', encounterK: 1.35, glassK: 1.90, scareMul: 1.00, cohesionK: 1.00, idleBoost: 0.95 },
-  lazy:    { id: 'lazy',    encounterK: 0.60, glassK: 0.60, scareMul: 1.15, cohesionK: 1.10, idleBoost: 1.80 },
-  leader:  { id: 'leader',  encounterK: 1.10, glassK: 1.00, scareMul: 0.80, cohesionK: 0.70, idleBoost: 0.90 },
-};
-const PERSONALITY_ORDER = ['shy', 'bold', 'curious', 'lazy', 'leader'];
-const DEFAULT_PERSONALITY = PERSONALITIES.curious;
-
 // Species that stake out a patch of tank and loosely patrol it instead of
 // drifting anywhere. A soft radial spring holds them near their home center.
 // Leaves schooling fish (swimmers) unrestricted — territories are a solo trait.
-const TERRITORIAL_SPECIES = new Set(['shark1', 'eel1', 'octo1']);
-const TERRITORY_RADIUS = 220;
-
 // If you add a new species, give it a custom arrival touch here too.
-const SPECIES_ARRIVALS = {
-  fish1:     { effect: 'glow',    path: 'playful', splashBand: [0.24, 0.34], endYF: 0.53, sway: 0.65 },
-  fish2:     { effect: 'glow',    path: 'graceful', splashBand: [0.22, 0.32], endYF: 0.5,  sway: 0.45 },
-  fish3:     { effect: 'bubbles', path: 'playful', splashBand: [0.24, 0.34], endYF: 0.55, sway: 0.75 },
-  fish4:     { effect: 'ribbon',  path: 'playful', splashBand: [0.22, 0.32], endYF: 0.52, sway: 0.58 },
-  fish5:     { effect: 'glow',    path: 'playful', splashBand: [0.24, 0.34], endYF: 0.54, sway: 0.7 },
-  puffer1:   { effect: 'bubbles', path: 'playful', splashBand: [0.28, 0.38], endYF: 0.6,  sway: 0.52, scaleMul: 1.04 },
-  seahorse1: { effect: 'pearls',  path: 'floaty',  splashBand: [0.18, 0.28], endYF: 0.46, sway: 1.05, scaleMul: 0.94 },
-  eel1:      { effect: 'ribbon',  path: 'slink',   splashBand: [0.7, 0.8],   endYF: 0.76, sway: 0.32, scaleMul: 0.96 },
-  stingray1: { effect: 'sand',    path: 'glide',   splashBand: [0.72, 0.82], endYF: 0.74, sway: 0.2,  scaleMul: 1.08 },
-  seaslug1:  { effect: 'silt',    path: 'heavy',   splashBand: [0.82, 0.9],  endYF: 0.86, sway: 0.18, scaleMul: 0.9 },
-  shark1:    { effect: 'wake',    path: 'heavy',   splashBand: [0.34, 0.46], endYF: 0.48, sway: 0.12, scaleMul: 1.14, spotlight: 'predator' },
-  seastar1:  { effect: 'sand',    path: 'heavy',   splashBand: [0.86, 0.92], endYF: 0.92, sway: 0.1,  scaleMul: 0.85 },
-  shrimp1:   { effect: 'silt',    path: 'heavy',   splashBand: [0.82, 0.9],  endYF: 0.9,  sway: 0.22, scaleMul: 0.85 },
-  octo1:     { effect: 'bubbles', path: 'floaty',  splashBand: [0.42, 0.55], endYF: 0.6,  sway: 0.55, scaleMul: 1.0 },
-  squid1:    { effect: 'ribbon',  path: 'slink',   splashBand: [0.28, 0.4],  endYF: 0.46, sway: 0.5,  scaleMul: 0.95 },
-};
-const DEFAULT_ARRIVAL = { effect: 'glow', path: 'playful', splashBand: [0.24, 0.34], endYF: 0.54, sway: 0.55, scaleMul: 1 };
 const warnedArrivalSpecies = new Set();
 
 function createShader(gl, type, source) {
@@ -616,6 +578,8 @@ class Fish {
       // Species-trait wiggle overrides (applied after seahorse-by-aspect detection).
       if (this.traits.ampMul !== undefined) this.wiggleAmpBase *= this.traits.ampMul;
       if (this.traits.freqMul !== undefined) this.wiggleBase *= this.traits.freqMul;
+      this.usesThree = threeAquarium.addFish(this.id, this.img);
+      if (this.usesThree) this.el.classList.add('three-source-hidden');
       finishFishImageLoad(this);
     });
 
@@ -739,6 +703,22 @@ class Fish {
 
     // ---- Wake distortion element (created on demand when a fish goes fast) ----
     this.wakeEl = null;
+  }
+
+  updateMetadata(meta) {
+    this.bio = (meta.bio || this.bio || '').trim();
+    const nextName = (meta.name || this.name || '').trim();
+    if (nextName === this.name) return;
+    this.name = nextName;
+    if (!this.nameTag && this.name) {
+      this.nameTag = document.createElement('div');
+      this.nameTag.className = 'fish-name';
+      this.nameTag.textContent = this.name;
+      aq.appendChild(this.nameTag);
+      this.nameShowUntil = performance.now() + NAME_SHOW_MS;
+    } else if (this.nameTag) {
+      this.nameTag.textContent = this.name;
+    }
   }
 
   requestImageLoad(options) {
@@ -2235,6 +2215,25 @@ class Fish {
       wiggleParts.push(`scale(${flutterX.toFixed(4)}, ${flutterY.toFixed(4)})`);
     }
     this.wiggleEl.style.transform = wiggleParts.join(' ');
+    if (this.usesThree) {
+      const depthProgress = this.layer?.progress || 0;
+      const pulse = this.traits?.jetPulse ? (this.traits.burst ? 0.055 : 0.035)
+        : this.traits?.glide ? 0.025 : 0.012;
+      threeAquarium.updateFish(this.id, {
+        x: tx,
+        y: ty,
+        width: w * finalScale,
+        height: h * finalScale,
+        flip,
+        rotation: clamped,
+        bank: bankAmt * Math.PI / 180,
+        wave: Math.max(0.012, ampRad * 0.75),
+        pulse,
+        opacity: this.layer?.opacity ?? 1,
+        depth: 1 - depthProgress,
+        z: (this.layer?.zIndex || 6) * 3,
+      });
+    }
     this.renderShadow(x, y, w, h, vx);
   }
 
@@ -2352,6 +2351,7 @@ class Fish {
     if (this.splash) this.splash.remove();
     if (this.nameTag) this.nameTag.remove();
     if (this.wakeEl) { this.wakeEl.remove(); this.wakeEl = null; }
+    threeAquarium.removeFish(this.id);
   }
 }
 
@@ -2722,6 +2722,7 @@ function tick(now) {
   for (const fish of fishById.values()) {
     try { fish.update(dt, now, scene); } catch (e) { console.warn('fish update failed', fish.id, e); }
   }
+  try { threeAquarium.render(now); } catch (e) { console.warn('Three.js render failed', e); }
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -2839,7 +2840,10 @@ function applyFishData(data, { fromCache = false } = {}) {
 
   for (const meta of data.fish) {
     serverIds.add(meta.id);
-    if (fishById.has(meta.id)) continue;
+    if (fishById.has(meta.id)) {
+      fishById.get(meta.id).updateMetadata(meta);
+      continue;
+    }
     if (culledIds.has(meta.id)) continue;
     const fish = new Fish(meta);
     fishById.set(meta.id, fish);
@@ -3017,40 +3021,9 @@ function checkDailyClear() {
 checkDailyClear();
 setInterval(checkDailyClear, DAILY_CLEAR_CHECK_MS);
 
-// ---------- Hidden reset hotspot ----------
-const resetBtn = document.getElementById('resetHotspot');
-if (resetBtn) {
-  resetBtn.addEventListener('click', async () => {
-    if (!confirm('Reset the aquarium and remove all fish for today?')) return;
-    let resetToken = '';
-    try { resetToken = sessionStorage.getItem(RESET_TOKEN_STORAGE_KEY) || ''; } catch {}
-    if (!resetToken) {
-      resetToken = (prompt('Enter the aquarium reset code:') || '').trim();
-      if (!resetToken) return;
-    }
-    try {
-      const r = await fetch('/api/reset', {
-        method: 'POST',
-        headers: { 'X-Reset-Token': resetToken },
-      });
-      if (r.status === 403 || r.status === 503) {
-        try { sessionStorage.removeItem(RESET_TOKEN_STORAGE_KEY); } catch {}
-        throw new Error(r.status === 503 ? 'reset token is not configured on the server' : 'invalid reset code');
-      }
-      if (!r.ok) throw new Error('reset failed');
-      try { sessionStorage.setItem(RESET_TOKEN_STORAGE_KEY, resetToken); } catch {}
-      // Have every current fish swim off-screen; they self-destroy on exit.
-      for (const f of fishById.values()) f.departToEdge();
-      countEl.textContent = '0 fish today';
-    } catch (e) {
-      console.warn(e);
-      alert(e.message || 'Reset failed. Please try again.');
-    }
-  });
-}
-
 function handleViewportResize() {
   if (caustics) caustics.resize();
+  threeAquarium.resize();
   const W = window.innerWidth, H = window.innerHeight;
   for (const f of fishById.values()) {
     if (f.mode !== 'school') continue;

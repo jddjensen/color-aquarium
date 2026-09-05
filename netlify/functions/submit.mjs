@@ -2,13 +2,18 @@ import { getStore } from "@netlify/blobs";
 import { randomBytes } from "node:crypto";
 import {
   decodePngDataUrl,
+  bumpDayRevision,
+  FISH_STORE,
   isSameOrigin,
   jsonResponse,
+  MAX_UPLOAD_BYTES,
   requestBodyTooLarge,
-  requireRateLimit,
+  requireDailyCapacity,
+  requireKioskToken,
+  releaseDailyCapacity,
   sanitizeBio,
   sanitizeName,
-  sanitizeSpecies,
+  sanitizeAndValidateSpecies,
   todayKey,
 } from "./_shared.mjs";
 
@@ -18,11 +23,11 @@ import {
 export default async (req) => {
   if (req.method !== "POST") return jsonResponse(405, { error: "method not allowed" });
   if (!isSameOrigin(req)) return jsonResponse(403, { error: "cross-origin blocked" });
-  if (requestBodyTooLarge(req, 16 * 1024 * 1024)) {
+  const kiosk = requireKioskToken(req);
+  if (!kiosk.ok) return kiosk.response;
+  if (requestBodyTooLarge(req, 4.5 * 1024 * 1024)) {
     return jsonResponse(413, { error: "too large" });
   }
-  const rate = await requireRateLimit(req, "submit");
-  if (!rate.ok) return rate.response;
 
   let payload;
   try {
@@ -31,29 +36,52 @@ export default async (req) => {
     return jsonResponse(400, { error: "invalid json" });
   }
 
-  const decoded = decodePngDataUrl(payload?.image, { maxBytes: 12 * 1024 * 1024 });
+  const decoded = decodePngDataUrl(payload?.image, { maxBytes: MAX_UPLOAD_BYTES });
   if (!decoded.ok) return jsonResponse(decoded.status, { error: decoded.error });
   const buf = decoded.buffer;
 
   const name = typeof payload?.name === "string" ? sanitizeName(payload.name) : "";
-  const species = sanitizeSpecies(payload?.species);
+  const species = sanitizeAndValidateSpecies(payload?.species);
+  if (!species) return jsonResponse(400, { error: "invalid species" });
   const bio = typeof payload?.bio === "string" ? sanitizeBio(payload.bio) : "";
   const day = todayKey();
   const id = randomBytes(8).toString("hex");
   const createdAt = Date.now();
 
-  const store = getStore({ name: "fish", consistency: "strong" });
-  await store.set(`${day}/${id}.png`, buf);
-  await store.setJSON(`${day}/${id}.json`, { name, species, bio, createdAt });
+  const store = getStore({ name: FISH_STORE, consistency: "strong" });
+  const capacity = await requireDailyCapacity(store, day, buf.length);
+  if (!capacity.ok) return capacity.response;
 
-  return jsonResponse(200, {
-    id,
-    url: `/submissions/${day}/${id}.png`,
-    day,
-    name,
-    species,
-    bio,
-  });
+  const metadataKey = `${day}/${id}.json`;
+  const imageKey = `${day}/${id}.png`;
+  try {
+    await store.setJSON(metadataKey, {
+      name, species, bio, createdAt,
+      imageBytes: buf.length,
+      width: decoded.width,
+      height: decoded.height,
+    });
+    // The PNG is the commit marker. Readers ignore metadata-only records.
+    await store.set(imageKey, buf);
+    const revision = await bumpDayRevision(store, day);
+    return jsonResponse(200, {
+      id,
+      url: `/submissions/${day}/${id}.png`,
+      day,
+      name,
+      species,
+      bio,
+      revision,
+    });
+  } catch (error) {
+    await store.delete(metadataKey).catch(() => {});
+    await store.delete(imageKey).catch(() => {});
+    await releaseDailyCapacity(day, buf.length).catch(() => {});
+    throw error;
+  }
 };
 
-export const config = { path: "/api/submit" };
+export const config = {
+  path: "/api/submit",
+  rateLimit: { windowLimit: 20, windowSize: 60, aggregateBy: ["ip", "domain"] },
+};

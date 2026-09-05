@@ -10,6 +10,8 @@ submissions/
 # Netlify + Node.js
 node_modules/
 .netlify/
+public/vendor/
+test-results/
 
 # Editor/OS
 .DS_Store
